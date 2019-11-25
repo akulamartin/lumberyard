@@ -20,7 +20,9 @@
 
 #include <QSortFilterProxyModel>
 #include <QSharedPointer>
+AZ_PUSH_DISABLE_WARNING(4251, "-Wunknown-warning-option") // 4251: 'QCollatorSortKey::d': class 'QSharedDataPointer<QCollatorSortKeyPrivate>' needs to have dll-interface to be used by clients of class 'QCollatorSortKey'
 #include <QCollator>
+AZ_POP_DISABLE_WARNING
 
 namespace AzToolsFramework
 {
@@ -38,6 +40,10 @@ namespace AzToolsFramework
 
             //asset type filtering
             void SetFilter(FilterConstType filter);
+            void FilterUpdatedSlotImmediate();
+
+        Q_SIGNALS:
+            void filterChanged();
 
             //////////////////////////////////////////////////////////////////////////
             //QSortFilterProxyModel

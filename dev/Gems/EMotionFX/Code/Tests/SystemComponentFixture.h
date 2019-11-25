@@ -23,6 +23,7 @@
 
 #include <AzCore/Asset/AssetManager.h>
 #include <AzCore/Memory/PoolAllocator.h>
+#include <AzCore/Jobs/JobManagerComponent.h>
 
 namespace EMotionFX
 {
@@ -40,7 +41,6 @@ namespace EMotionFX
         void SetUp() override
         {
             AZ::ComponentApplication::Descriptor appDesc;
-            appDesc.m_memoryBlocksByteSize = 10 * 1024 * 1024;
             mSystemEntity = mApp.Create(appDesc);
 
             mLocalFileIO = AZStd::make_unique<AZ::IO::LocalFileIO>();
@@ -74,6 +74,14 @@ namespace EMotionFX
         AZ::SerializeContext* GetSerializeContext() const
         {
             return m_serializeContext;
+        }
+
+        AZStd::string ResolvePath(const char* path)
+        {
+            AZStd::string result;
+            result.resize(AZ::IO::MaxPathLength);
+            AZ::IO::LocalFileIO::GetInstance()->ResolvePath(path, result.data(), result.size());
+            return result;
         }
 
     protected:
@@ -127,6 +135,7 @@ namespace EMotionFX
     // Note that the SystemComponent depends on the AssetManagerComponent
     using SystemComponentFixture = ComponentFixture<
         AZ::AssetManagerComponent,
+        AZ::JobManagerComponent,
         EMotionFX::Integration::SystemComponent
     >;
 

@@ -162,7 +162,7 @@ namespace Water
 
         m_enabled = false;
         AZ::OceanEnvironmentBus::Handler::BusDisconnect();
-        WaterOceanComponentData_UpdateOceanBuoyancy(m_general.m_height);
+        WaterOceanComponentData_UpdateOceanBuoyancy(AZ::OceanConstants::s_HeightMin);
 
         // turn off ocean and delete it
         I3DEngine* engine = GetISystem() ? GetISystem()->GetI3DEngine() : nullptr;
@@ -344,7 +344,7 @@ namespace Water
         return m_fog.m_color;
     }
 
-    float WaterOceanComponentData::GetFogColorMulitplier() const
+    float WaterOceanComponentData::GetFogColorMultiplier() const
     {
         return m_fog.m_colorMultiplier;
     }
@@ -376,9 +376,9 @@ namespace Water
         m_fog.m_color = fogColor;
     }
 
-    void WaterOceanComponentData::SetFogColorMulitplier(float fogMulitplier)
+    void WaterOceanComponentData::SetFogColorMultiplier(float fogMultiplier)
     {
-        m_fog.m_colorMultiplier = fogMulitplier;
+        m_fog.m_colorMultiplier = fogMultiplier;
     }
 
     void WaterOceanComponentData::SetNearFogColor(const AZ::Color& nearColor)

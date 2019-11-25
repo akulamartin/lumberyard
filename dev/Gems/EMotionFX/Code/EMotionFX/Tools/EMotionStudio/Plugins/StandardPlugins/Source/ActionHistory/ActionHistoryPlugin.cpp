@@ -90,7 +90,7 @@ namespace EMStudio
         mDock->SetContents(mList);
 
         // Detect item selection changes.
-        connect(mList, SIGNAL(itemSelectionChanged()), this, SLOT(OnSelectedItemChanged()));
+        connect(mList, &QListWidget::itemSelectionChanged, this, &ActionHistoryPlugin::OnSelectedItemChanged);
 
         // Register the callback.
         mCallback = new ActionHistoryCallback(mList);
@@ -108,8 +108,8 @@ namespace EMStudio
         AZStd::string historyItemString;
 
         // Add all history items to the action history list.
-        const uint32 numHistoryItems = commandManager->GetNumHistoryItems();
-        for (uint32 i = 0; i < numHistoryItems; ++i)
+        const size_t numHistoryItems = commandManager->GetNumHistoryItems();
+        for (size_t i = 0; i < numHistoryItems; ++i)
         {
             const MCore::CommandManager::CommandHistoryEntry& historyItem = commandManager->GetHistoryItem(i);
 
@@ -125,12 +125,6 @@ namespace EMStudio
     // Called when the selection changed.
     void ActionHistoryPlugin::OnSelectedItemChanged()
     {
-        AZStd::string commandResult;
-        if(!GetCommandManager()->ExecuteCommand(CommandSystem::CommandRecorderClear::s_RecorderClearCmdName, commandResult, false))
-        {
-            AZ_Warning("Editor", false, "Clear recorder command failed: %s", commandResult.c_str());
-        }
-
         // Get the list of selected items and make sure exactly one is selected.
         QList<QListWidgetItem*> selected = mList->selectedItems();
         if (selected.count() != 1)

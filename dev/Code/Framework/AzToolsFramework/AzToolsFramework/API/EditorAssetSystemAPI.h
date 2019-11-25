@@ -49,6 +49,9 @@ namespace AzToolsFramework
 
             virtual ~AssetSystemRequest() = default;
 
+            //! Retrieve the absolute path for the Asset Database Location
+            virtual bool GetAbsoluteAssetDatabaseLocation(AZStd::string& /*result*/) { return false; }
+
             //! Retrieve the absolute folder path to the current game's source assets (the ones that go into source control)
             //! This may include the current mod path, if a mod is being edited by the editor
             virtual const char* GetAbsoluteDevGameFolderPath() = 0;
@@ -104,6 +107,28 @@ namespace AzToolsFramework
             * @return false if this process fails.
             */
             virtual bool GetAssetSafeFolders(AZStd::vector<AZStd::string>& assetSafeFolders) = 0;
+
+            /**
+            * Query to see if a specific asset platform is enabled
+            * @param platform the asset platform to check e.g. es3, ios, etc.
+            * @return true if enabled, false otherwise
+            */
+            virtual bool IsAssetPlatformEnabled(const char* platform) = 0;
+
+            /**
+            * Get the total number of pending assets left to process for a specific asset platform
+            * @param platform the asset platform to check e.g. es3, ios, etc.
+            * @return -1 if the process fails, a positive number otherwise
+            */
+            virtual int GetPendingAssetsForPlatform(const char* platform) = 0;
+
+            /**
+            * Given a UUID of a source file, retrieve the products info.
+            * @param sourceUUID is the UUID of a source file - If you have an AssetID, its the m_guid member of that assetId
+            * @param productsAssetInfo is a /ref AZStd::vector<AZ::Data::AssetInfo> filled out with details about the products
+            * returns false if it cannot find the source, true otherwise.
+            */
+            virtual bool GetAssetsProducedBySourceUUID(const AZ::Uuid& sourceUuid, AZStd::vector<AZ::Data::AssetInfo>& productsAssetInfo) = 0;
         };
         
 
@@ -280,7 +305,8 @@ namespace AzToolsFramework
             virtual AZ::Outcome<JobInfoContainer> GetAssetJobsInfo(const AZStd::string& sourcePath, const bool escalateJobs) = 0;
 
             /// Retrieve Jobs information for the given assetId, setting escalteJobs to true will escalate all queued jobs 
-            virtual AZ::Outcome<JobInfoContainer> GetAssetJobsInfoByAssetID(const AZ::Data::AssetId& assetId, const bool escalateJobs) = 0;
+            /// you can also specify whether fencing is required  
+            virtual AZ::Outcome<JobInfoContainer> GetAssetJobsInfoByAssetID(const AZ::Data::AssetId& assetId, const bool escalateJobs, bool requireFencing) = 0;
 
             /// Retrieve Jobs information for the given jobKey 
             virtual AZ::Outcome<JobInfoContainer> GetAssetJobsInfoByJobKey(const AZStd::string& jobKey, const bool escalateJobs) = 0;
@@ -299,7 +325,7 @@ namespace AzToolsFramework
 
         inline const char* GetHostAssetPlatform()
         {
-#if defined(AZ_PLATFORM_APPLE_OSX)
+#if defined(AZ_PLATFORM_MAC)
             return "osx_gl";
 #elif defined(AZ_PLATFORM_WINDOWS)
             return "pc";

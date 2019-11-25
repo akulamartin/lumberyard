@@ -32,7 +32,8 @@ SUBFOLDERS = [
     'ComponentEntityEditorPlugin',
     'UiCanvasEditor',
     'DeploymentTool',
-    'Legacy',
+    'ProjectSettingsTool',
+    #'Legacy',
     #'_ExampleQMLViewPane',
     #'_ExampleQtViewPane',
     ]

@@ -58,6 +58,25 @@ namespace AzToolsFramework
         return false;
     }
 
+    bool NodeGroupMatchesFilter(const InstanceDataNode& node, const char* filter)
+    {
+        if (!filter || filter[0] == '\0')
+        {
+            return true;
+        }
+
+        if (node.GetGroupElementMetadata() && node.GetGroupElementMetadata()->m_description)
+        {
+            // Check if we match the filter
+            if (AzFramework::StringFunc::Find(node.GetGroupElementMetadata()->m_description, filter) != AZStd::string::npos)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     //-----------------------------------------------------------------------------
 
     bool HasAnyVisibleChildren(const InstanceDataNode& node, bool isSlicePushUI)
@@ -84,6 +103,8 @@ namespace AzToolsFramework
     //-----------------------------------------------------------------------------
     NodeDisplayVisibility CalculateNodeDisplayVisibility(const InstanceDataNode& node, bool isSlicePushUI)
     {
+        AZ_PROFILE_FUNCTION(AZ::Debug::ProfileCategory::AzToolsFramework);
+
         NodeDisplayVisibility visibility = NodeDisplayVisibility::NotVisible;
 
         // If parent is a dynamic serializable field with edit reflection, default to visible.
@@ -93,6 +114,12 @@ namespace AzToolsFramework
             {
                 visibility = NodeDisplayVisibility::Visible;
             }
+        }
+
+        // Show UI Elements by default
+        if (node.GetElementMetadata() && 0 != (node.GetElementMetadata()->m_flags & AZ::SerializeContext::ClassElement::FLG_UI_ELEMENT))
+        {
+            visibility = NodeDisplayVisibility::Visible;
         }
 
         // Use class meta data as opposed to parent's reflection data if this is a root node or a container element.
@@ -164,23 +191,32 @@ namespace AzToolsFramework
     AZStd::string GetNodeDisplayName(const AzToolsFramework::InstanceDataNode& node)
     {
         // Introspect template for generic component wrappers.
-        if (node.GetClassMetadata() && 
+        if (node.GetClassMetadata() &&
             node.GetClassMetadata()->m_typeId == AZ::AzTypeInfo<AzToolsFramework::Components::GenericComponentWrapper>::Uuid())
         {
+            Components::GenericComponentWrapper* componentWrapper = nullptr;
             if (node.GetNumInstances() > 0)
             {
-                const Components::GenericComponentWrapper* componentWrapper =
-                    static_cast<Components::GenericComponentWrapper*>(node.FirstInstance());
-                return componentWrapper->GetDisplayName();
+                componentWrapper = static_cast<Components::GenericComponentWrapper*>(node.FirstInstance());
             }
             else
             {
                 auto comparisonNode = node.GetComparisonNode();
                 if (comparisonNode && comparisonNode->GetNumInstances() > 0)
                 {
-                    const Components::GenericComponentWrapper* componentWrapper =
-                        static_cast<Components::GenericComponentWrapper*>(comparisonNode->FirstInstance());
-                    return GetFriendlyComponentName(componentWrapper->GetTemplate());
+                    componentWrapper = static_cast<Components::GenericComponentWrapper*>(comparisonNode->FirstInstance());
+                }
+            }
+
+            if (componentWrapper)
+            {
+                if (componentWrapper->GetTemplate())
+                {
+                    return componentWrapper->GetDisplayName();
+                }
+                else
+                {
+                    return "<empty component>";
                 }
             }
         }
@@ -205,7 +241,7 @@ namespace AzToolsFramework
         }
         return displayName;
     }
-    
+
     bool ReadVisibilityAttribute(void* instance, AZ::Edit::Attribute* attr, AZ::Crc32& visibility)
     {
         PropertyAttributeReader reader(instance, attr);
@@ -326,6 +362,19 @@ namespace AzToolsFramework
 
         // No one said no, show by default
         return AZ::Edit::PropertyVisibility::Show;
+    }
+
+    void OnEntityComponentPropertyChanged(AZ::EntityId entityId, AZ::ComponentId componentId)
+    {
+        PropertyEditorEntityChangeNotificationBus::Event(
+            entityId, &PropertyEditorEntityChangeNotifications::OnEntityComponentPropertyChanged,
+            componentId);
+    }
+
+    void OnEntityComponentPropertyChanged(const AZ::EntityComponentIdPair& entityComponentIdPair)
+    {
+        OnEntityComponentPropertyChanged(
+            entityComponentIdPair.GetEntityId(), entityComponentIdPair.GetComponentId());
     }
 
 } // namespace AzToolsFramework

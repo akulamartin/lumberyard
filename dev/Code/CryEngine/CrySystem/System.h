@@ -16,6 +16,7 @@
 #include <ISystem.h>
 #include <IRenderer.h>
 #include <IPhysics.h>
+#include <IPlatformOS.h>
 #include <IWindowMessageHandler.h>
 
 #include "Timer.h"
@@ -32,6 +33,9 @@
 #include "RenderBus.h"
 
 #include <LoadScreenBus.h>
+#include <ThermalInfo.h>
+
+#include <AzCore/Module/DynamicModuleHandle.h>
 
 struct IConsoleCmdArgs;
 class CServerThrottle;
@@ -69,7 +73,11 @@ namespace minigui
 
 #if defined(AZ_RESTRICTED_PLATFORM)
 #define AZ_RESTRICTED_SECTION SYSTEM_H_SECTION_1
-#include AZ_RESTRICTED_FILE(System_h, AZ_RESTRICTED_PLATFORM)
+    #if defined(AZ_PLATFORM_XENIA)
+        #include "Xenia/System_h_xenia.inl"
+    #elif defined(AZ_PLATFORM_PROVO)
+        #include "Provo/System_h_provo.inl"
+    #endif
 #else
 #if defined(WIN32) || defined(LINUX) || defined(APPLE)
 #define AZ_LEGACY_CRYSYSTEM_TRAIT_ALLOW_CREATE_BACKUP_LOG_FILE 1
@@ -245,6 +253,7 @@ extern VTuneFunction VTPause;
 
 struct SSystemCVars
 {
+    int az_streaming_stats;
     int sys_streaming_requests_grouping_time_period;
     int sys_streaming_sleep;
     int sys_streaming_memory_budget;
@@ -312,7 +321,11 @@ struct SSystemCVars
     int sys_display_threads;
 #elif defined(AZ_RESTRICTED_PLATFORM)
 #define AZ_RESTRICTED_SECTION SYSTEM_H_SECTION_2
-#include AZ_RESTRICTED_FILE(System_h, AZ_RESTRICTED_PLATFORM)
+    #if defined(AZ_PLATFORM_XENIA)
+        #include "Xenia/System_h_xenia.inl"
+    #elif defined(AZ_PLATFORM_PROVO)
+        #include "Provo/System_h_provo.inl"
+    #endif
 #endif
 };
 extern SSystemCVars g_cvars;
@@ -534,6 +547,7 @@ public:
     IZLibCompressor* GetIZLibCompressor() { return m_pIZLibCompressor; }
     IZLibDecompressor* GetIZLibDecompressor() { return m_pIZLibDecompressor; }
     ILZ4Decompressor* GetLZ4Decompressor() { return m_pILZ4Decompressor; }
+    IZStdDecompressor* GetZStdDecompressor() { return m_pIZStdDecompressor; }
     WIN_HWND GetHWND(){ return m_hWnd; }
     IGemManager* GetGemManager() override { return m_pGemManager; }
     ICrypto* GetCrypto() { return m_crypto; }
@@ -568,7 +582,7 @@ public:
     virtual void GetUpdateStats(SSystemUpdateStats& stats);
 
     //////////////////////////////////////////////////////////////////////////
-    virtual XmlNodeRef CreateXmlNode(const char* sNodeName = "", bool bReuseStrings = false);
+    virtual XmlNodeRef CreateXmlNode(const char* sNodeName = "", bool bReuseStrings = false, bool bIsProcessingInstruction = false);
     virtual XmlNodeRef LoadXmlFromFile(const char* sFilename, bool bReuseStrings = false);
     virtual XmlNodeRef LoadXmlFromBuffer(const char* buffer, size_t size, bool bReuseStrings = false, bool bSuppressWarnings = false);
     virtual IXmlUtils* GetXmlUtils();
@@ -596,11 +610,15 @@ public:
         }
         if (m_pCpu->hasSSE2())
         {
-            Flags |= CPUF_SSE;
+            Flags |= CPUF_SSE2;
         }
         if (m_pCpu->has3DNow())
         {
             Flags |= CPUF_3DNOW;
+        }
+        if (m_pCpu->hasF16C())
+        {
+            Flags |= CPUF_F16C;
         }
 
         return Flags;
@@ -776,9 +794,12 @@ private:
     void RenderOverscanBorders();
     void RenderMemStats();
     void RenderThreadInfo();
-    WIN_HMODULE LoadDLL(const char* dllName);
+
+    AZStd::unique_ptr<AZ::DynamicModuleHandle> LoadDLL(const char* dllName);
+
+    void FreeLib(AZStd::unique_ptr<AZ::DynamicModuleHandle>& hLibModule);
+
     bool UnloadDLL(const char* dllName);
-    void FreeLib(WIN_HMODULE hLibModule);
     void QueryVersionInfo();
     void LogVersion();
     void LogBuildInfo();
@@ -800,11 +821,15 @@ private:
 
     void AddCVarGroupDirectory(const string& sPath);
 
-    WIN_HMODULE LoadDynamiclibrary(const char* dllName) const;
+    AZStd::unique_ptr<AZ::DynamicModuleHandle> LoadDynamiclibrary(const char* dllName) const;
 
 #if defined(AZ_RESTRICTED_PLATFORM)
 #define AZ_RESTRICTED_SECTION SYSTEM_H_SECTION_3
-#include AZ_RESTRICTED_FILE(System_h, AZ_RESTRICTED_PLATFORM)
+    #if defined(AZ_PLATFORM_XENIA)
+        #include "Xenia/System_h_xenia.inl"
+    #elif defined(AZ_PLATFORM_PROVO)
+        #include "Provo/System_h_provo.inl"
+    #endif
 #elif defined(WIN32)
     bool GetWinGameFolder(char* szMyDocumentsPath, int maxPathSize);
 #endif
@@ -840,6 +865,8 @@ public:
         cryAsyncMemcpyDelegate(dst, src, size, nFlags, sync);
 #endif
     }
+    virtual void SetConsoleDrawEnabled(bool enabled) { m_bDrawConsole = enabled; }
+    virtual void SetUIDrawEnabled(bool enabled) { m_bDrawUI = enabled; }
 
     // -------------------------------------------------------------
 
@@ -871,6 +898,7 @@ public:
     // Gets the dimensions (in pixels) of the primary physical display.
     // Returns true if this info is available, returns false otherwise.
     bool GetPrimaryPhysicalDisplayDimensions(int& o_widthPixels, int& o_heightPixels);
+    bool IsTablet();
 
 private: // ------------------------------------------------------
 
@@ -910,8 +938,11 @@ private: // ------------------------------------------------------
     bool                                    m_hasJustResumed;           // Has resume game just been called
     bool                                    m_expectingMapCommand;
 #endif
+    bool                                    m_bDrawConsole;              //!< Set to true if OK to draw the console.
+    bool                                    m_bDrawUI;                   //!< Set to true if OK to draw UI.
 
-    std::map<CCryNameCRC, WIN_HMODULE> m_moduleDLLHandles;
+
+    std::map<CCryNameCRC, AZStd::unique_ptr<AZ::DynamicModuleHandle> > m_moduleDLLHandles;
 
     //! THe streaming engine
     class CStreamEngine* m_pStreamEngine;
@@ -954,6 +985,9 @@ private: // ------------------------------------------------------
 
     //! System to access lz4 hc decompressor
     ILZ4Decompressor* m_pILZ4Decompressor;
+
+    //! System access to zstd decompressor
+    IZStdDecompressor* m_pIZStdDecompressor;
 
     //! System to load and access gems
     IGemManager* m_pGemManager;
@@ -1004,6 +1038,7 @@ private: // ------------------------------------------------------
     ICVar* m_rWidth;
     ICVar* m_rHeight;
     ICVar* m_rWidthAndHeightAsFractionOfScreenSize;
+    ICVar* m_rTabletWidthAndHeightAsFractionOfScreenSize;
     ICVar* m_rHDRDolby;
     ICVar* m_rMaxWidth;
     ICVar* m_rMaxHeight;
@@ -1052,7 +1087,11 @@ private: // ------------------------------------------------------
 
 #if defined(AZ_RESTRICTED_PLATFORM)
 #define AZ_RESTRICTED_SECTION SYSTEM_H_SECTION_4
-#include AZ_RESTRICTED_FILE(System_h, AZ_RESTRICTED_PLATFORM)
+    #if defined(AZ_PLATFORM_XENIA)
+        #include "Xenia/System_h_xenia.inl"
+    #elif defined(AZ_PLATFORM_PROVO)
+        #include "Provo/System_h_provo.inl"
+    #endif
 #endif
 
     ICVar* m_sys_audio_disable;
@@ -1128,7 +1167,6 @@ private: // ------------------------------------------------------
 
     // Pause mode.
     bool m_bPaused;
-    uint8 m_PlatformOSCreateFlags;
     bool m_bNoUpdate;
 
     uint64 m_nUpdateCounter;
@@ -1201,8 +1239,6 @@ public:
     {
         m_ErrorMessages.clear();
     }
-
-    virtual void AddPlatformOSCreateFlag(const uint8 createFlag) { m_PlatformOSCreateFlags |= createFlag; }
 
     bool IsLoading()
     {
@@ -1277,6 +1313,8 @@ protected: // -------------------------------------------------------------
     std::vector<IWindowMessageHandler*> m_windowMessageHandlers;
     bool m_initedOSAllocator = false;
     bool m_initedSysAllocator = false;
+
+    AZStd::unique_ptr<ThermalInfoHandler> m_thermalInfoHandler;
 };
 
 /*extern static */ bool QueryModuleMemoryInfo(SCryEngineStatsModuleInfo& moduleInfo, int index);

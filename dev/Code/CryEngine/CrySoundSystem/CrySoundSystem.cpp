@@ -23,22 +23,10 @@
 #include <AudioSystem.h>
 #include <SoundCVars.h>
 
-#if defined(AZ_RESTRICTED_PLATFORM)
-#undef AZ_RESTRICTED_SECTION
-#define CRYSOUNDSYSTEM_CPP_SECTION_1 1
-#define CRYSOUNDSYSTEM_CPP_SECTION_2 2
-#define CRYSOUNDSYSTEM_CPP_SECTION_3 3
-#endif
-
 #if defined(INCLUDE_AUDIO_PRODUCTION_CODE)
     #include <IViewSystem.h>
     #include <IGameFramework.h>
 #endif // INCLUDE_AUDIO_PRODUCTION_CODE
-
-#if defined(AZ_RESTRICTED_PLATFORM)
-#define AZ_RESTRICTED_SECTION CRYSOUNDSYSTEM_CPP_SECTION_1
-#include AZ_RESTRICTED_FILE(CrySoundSystem_cpp, AZ_RESTRICTED_PLATFORM)
-#endif
 
 namespace Audio
 {
@@ -47,6 +35,11 @@ namespace Audio
     CAudioLogger g_audioLogger;
 
 #define MAX_MODULE_NAME_LENGTH 256
+
+    namespace Platform
+    {
+        void InitializeAudio(CSoundCVars& audioCVars, CAudioLogger& audioLogger);
+    }
 
     ///////////////////////////////////////////////////////////////////////////////////////////////////
     class CSystemEventListener_Audio
@@ -210,10 +203,7 @@ class CEngineModule_CrySoundSystem
 
         if (CreateAudioSystem(env))
         {
-#if defined(AZ_RESTRICTED_PLATFORM)
-#define AZ_RESTRICTED_SECTION CRYSOUNDSYSTEM_CPP_SECTION_2
-#include AZ_RESTRICTED_FILE(CrySoundSystem_cpp, AZ_RESTRICTED_PLATFORM)
-#endif
+            Platform::InitializeAudio(g_audioCVars, g_audioLogger);
 
             g_audioLogger.Log(eALT_ALWAYS, "%s loaded!", GetName());
 
@@ -252,25 +242,13 @@ CRYREGISTER_SINGLETON_CLASS(CEngineModule_CrySoundSystem)
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 CEngineModule_CrySoundSystem::CEngineModule_CrySoundSystem()
 {
-#if defined(AZ_RESTRICTED_PLATFORM)
-#define AZ_RESTRICTED_SECTION CRYSOUNDSYSTEM_CPP_SECTION_3
-#include AZ_RESTRICTED_FILE(CrySoundSystem_cpp, AZ_RESTRICTED_PLATFORM)
-#else
-#define CRYSOUNDSYSTEM_CPP_TRAIT_DISABLE_AUDIO 0
-#endif
-#if CRYSOUNDSYSTEM_CPP_TRAIT_DISABLE_AUDIO || defined(AZ_TESTS_ENABLED)
-    #define DEFAULT_AUDIO_SYSTEM_IMPLEMENTATION_NAME    "CryAudioImplNoSound"
-#else
-    #define DEFAULT_AUDIO_SYSTEM_IMPLEMENTATION_NAME    "CryAudioImplWwise"
-#endif
-
     // Register audio implementation name cvar
     // Removed the ability to change this at runtime.  If it's needed by someone we can revisit making it work again.
     m_cvAudioSystemImplementationName = REGISTER_STRING(
-        "s_AudioSystemImplementationName", DEFAULT_AUDIO_SYSTEM_IMPLEMENTATION_NAME, VF_CHEAT | VF_CHEAT_NOCHECK | VF_REQUIRE_APP_RESTART | VF_DEV_ONLY,
+        "s_AudioSystemImplementationName", AZ_TRAIT_CRYSOUNDSYSTEM_DEFAULT_AUDIO_SYSTEM_IMPLEMENTATION_NAME, VF_CHEAT | VF_CHEAT_NOCHECK | VF_REQUIRE_APP_RESTART | VF_DEV_ONLY,
         "Holds the name of the AudioSystemImplementation library to be used.\n"
         "Usage: s_AudioSystemImplementationName <name of the library without extension>\n"
-        "Default: " DEFAULT_AUDIO_SYSTEM_IMPLEMENTATION_NAME "\n"
+        "Default: " AZ_TRAIT_CRYSOUNDSYSTEM_DEFAULT_AUDIO_SYSTEM_IMPLEMENTATION_NAME "\n"
         );
 
     Audio::g_audioCVars.RegisterVariables();

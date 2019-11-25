@@ -15,6 +15,7 @@
 #include "EditorEntitySortBus.h"
 
 #include <AzCore/std/functional.h>
+#include <AzCore/std/containers/set.h>
 #include <AzCore/std/smart_ptr/unique_ptr.h>
 #include <AzCore/Outcome/Outcome.h>
 #include <AzCore/Component/EntityBus.h>
@@ -73,6 +74,8 @@ namespace AzToolsFramework
         void EntityRegistered(AZ::EntityId entityId) override;
         void EntityDeregistered(AZ::EntityId entityId) override;
         void EntityParentChanged(AZ::EntityId entityId, AZ::EntityId newParentId, AZ::EntityId oldParentId) override;
+        void SetEntityInstantiationPosition(const AZ::EntityId& parent, const AZ::EntityId& beforeEntity) override;
+        void ClearEntityInstantiationPosition() override;
 
         ////////////////////////////////////////////////////////////////////////
         // EditorMetricsEventsBus
@@ -148,6 +151,7 @@ namespace AzToolsFramework
 
         void AddChildToParent(AZ::EntityId parentId, AZ::EntityId childId);
         void RemoveChildFromParent(AZ::EntityId parentId, AZ::EntityId childId);
+        void RemoveFromAncestorCyclicDependencyList(const AZ::EntityId& parentId, const AZ::EntityId& entityId);
         void ReparentChild(AZ::EntityId entityId, AZ::EntityId newParentId, AZ::EntityId oldParentId);
 
         void UpdateSliceInfoHierarchy(AZ::EntityId entityId);
@@ -197,15 +201,29 @@ namespace AzToolsFramework
             bool IsSubsliceEntity() const override;
             bool IsSliceRoot() const override;
             bool IsSubsliceRoot() const override;
+            //Does this entity have any children added or deleted. Ignore any other kind of change.
+            bool HasSliceEntityAnyChildrenAddedOrDeleted() const override;
+            // Does the entity have any property changes in its top level. Ignore any changes in children.
+            bool HasSliceEntityPropertyOverridesInTopLevel() const override;
             bool HasSliceEntityOverrides() const override;
             bool HasSliceChildrenOverrides() const override;
             bool HasSliceAnyOverrides() const override;
+            bool HasCyclicDependency() const override;
             AZ::u64 GetIndexForSorting() const override;
             bool IsSelected() const override;
             bool IsVisible() const override;
             bool IsHidden() const override;
             bool IsLocked() const override;
+            // Lock status can be overwritten if an entity is in a locked layer.
+            // However, in some cases (like the outliner), this entity's specific state needs to be known.
+            bool IsJustThisEntityLocked() const override;
             bool IsConnected() const;
+            void AddToCyclicDependencyList(const AZ::EntityId& entityId) override;
+            void RemoveFromCyclicDependencyList(const AZ::EntityId& entityId) override;
+            AzToolsFramework::EntityIdList GetCyclicDependencyList() const override;
+
+            bool IsComponentExpanded(AZ::ComponentId id) const override;
+            void SetComponentExpanded(AZ::ComponentId id, bool expanded) override;
 
             ////////////////////////////////////////////////////////////////////////
             // EditorLockComponentNotificationBus::Handler
@@ -244,16 +262,18 @@ namespace AzToolsFramework
 
             enum SliceFlags
             {
-                SliceFlag_None     = 0,
-                SliceFlag_Entity   = 1 << 0,
-                SliceFlag_Root     = 1 << 1,
+                SliceFlag_None = 0,
+                SliceFlag_Entity = 1 << 0,
+                SliceFlag_Root = 1 << 1,
                 SliceFlag_Subslice = 1 << 2,
 
-                SliceFlag_EntityNameOverridden          = 1 << 3, // special case since it's not saved in a component
-                SliceFlag_EntityActivationOverridden    = 1 << 4, // special case since it's not saved in a component
-                SliceFlag_EntityComponentsOverridden    = 1 << 5,
+                SliceFlag_EntityNameOverridden = 1 << 3, // special case since it's not saved in a component
+                SliceFlag_EntityActivationOverridden = 1 << 4, // special case since it's not saved in a component
+                SliceFlag_EntityComponentsOverridden = 1 << 5,
+                SliceFlag_EntityHasAdditionsDeletions = 1 << 6, 
 
-                SliceFlag_EntityHasOverrides    = (SliceFlag_EntityNameOverridden | SliceFlag_EntityActivationOverridden | SliceFlag_EntityComponentsOverridden),
+                SliceFlag_EntityHasNonChildOverrides = (SliceFlag_EntityNameOverridden | SliceFlag_EntityActivationOverridden | SliceFlag_EntityComponentsOverridden),
+                SliceFlag_EntityHasOverrides    = (SliceFlag_EntityNameOverridden | SliceFlag_EntityActivationOverridden | SliceFlag_EntityComponentsOverridden | SliceFlag_EntityHasAdditionsDeletions),
 
                 SliceFlag_SliceRoot       = (SliceFlag_Entity | SliceFlag_Root),
                 SliceFlag_SubsliceRoot    = (SliceFlag_Entity | SliceFlag_Root | SliceFlag_Subslice),
@@ -270,11 +290,17 @@ namespace AzToolsFramework
 
             bool CanProcessOverrides() const;
 
+            void AddChildAddedDeleted(AZ::ComponentId componentId);
+            void RemoveChildAddedDeleted(AZ::ComponentId componentId);
             void AddOverriddenComponent(AZ::ComponentId componentId);
             void RemoveOverriddenComponent(AZ::ComponentId componentId);
 
             void DetectInitialOverrides();
             void ModifyParentsOverriddenChildren(AZ::EntityId entityId, AZ::u8 lastFlags, bool hasOverrides);
+            void UpdateCyclicDependencyInfo();
+
+            typedef bool(*EntityInHierarchyConditionFunction)(AZ::EntityId);
+            bool DoesEntityHierarchyOverrideState(EntityInHierarchyConditionFunction stateCheckFunction) const;
 
             AZ::EntityId m_entityId;
             AZ::EntityId m_parentId;
@@ -289,6 +315,7 @@ namespace AzToolsFramework
             AZStd::string m_name;
             AZStd::string m_sliceAssetName;
             AZStd::unordered_map<AZ::EntityId, AZ::u64> m_childIndexCache;
+            AZStd::vector<AZ::EntityId> m_cyclicDependencyList;
 
             // slice entity override state cache
             AZ::Entity* m_entity = nullptr;
@@ -297,6 +324,10 @@ namespace AzToolsFramework
             AZ::SerializeContext* m_serializeContext = nullptr;
 
             AZStd::set<AZ::ComponentId> m_overriddenComponents;
+
+            AZStd::unordered_map<AZ::ComponentId, bool> m_componentExpansionStateMap;
+
+            AZStd::set<AZ::ComponentId> m_addedRemovedComponents;
         };
 
         EditorEntityModelEntry& GetInfo(const AZ::EntityId& entityId);
@@ -315,5 +346,9 @@ namespace AzToolsFramework
         // This lets us add the entities in a more efficient manner.
         AZStd::unordered_set<AZ::EntityId> m_queuedEntityAdds;
         AZStd::unordered_set<AZ::EntityId> m_queuedEntityAddsNotYetActivated;
+
+        AZ::EntityId m_postInstantiateBeforeEntity;
+        AZ::EntityId m_postInstantiateSliceParent;
+        bool m_gotInstantiateSliceDetails = false;
     };
 }

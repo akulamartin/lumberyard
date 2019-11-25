@@ -41,6 +41,8 @@ namespace EMotionFX
             ACTOR_CHUNK_ATTACHMENTNODES       = 15,       // Actor_AttachmentNodes
             ACTOR_CHUNK_MATERIALATTRIBUTESET  = 16,
             ACTOR_CHUNK_GENERICMATERIAL       = 17,       // Actor_GenericMaterial
+            ACTOR_CHUNK_PHYSICSSETUP          = 18,
+            ACTOR_CHUNK_SIMULATEDOBJECTSETUP  = 19,
             ACTOR_FORCE_32BIT                 = 0xFFFFFFFF
         };
 
@@ -372,6 +374,7 @@ namespace EMotionFX
 
 
         // a morph target transformation
+        // (aligned)
         struct Actor_MorphTargetTransform
         {
             uint32          mNodeIndex;         // the node name where the transform belongs to

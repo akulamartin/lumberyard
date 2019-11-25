@@ -16,12 +16,13 @@
 #include <AzCore/base.h>
 #include <AzCore/Memory/SystemAllocator.h>
 
+#include <QBasicTimer>
 #include <QEvent>
 #include <QTreeView>
 
 #pragma once
 class QFocusEvent;
-
+class QMouseEvent;
 class OutlinerTreeViewModel;
 
 //! This class largely exists to emit events for the OutlinerWidget to listen in on.
@@ -42,6 +43,8 @@ public:
     virtual ~OutlinerTreeView();
 
     void setAutoExpandDelay(int delay);
+
+    static int GetLayerSquareSize() { return 20; }
 Q_SIGNALS:
     void ItemDropped();
 
@@ -61,17 +64,24 @@ protected:
 
     void timerEvent(QTimerEvent* event) override;
 private:
+    void ClearQueuedMouseEvent();
+
     void processQueuedMousePressedEvent(QMouseEvent* event);
 
     void startCustomDrag(const QModelIndexList& indexList, Qt::DropActions supportedActions);
 
     QImage createDragImage(const QModelIndexList& indexList);
 
-    bool m_mousePressedQueued;
+    void DrawLayerUI(QPainter* painter, const QRect& rect, const QModelIndex& index) const;
+
+    QMouseEvent* m_queuedMouseEvent;
+    bool m_draggingUnselectedItem; // This is set when an item is dragged outside its bounding box.
     QPoint m_mousePressedPos;
 
     int m_expandOnlyDelay = -1;
     QBasicTimer m_expandTimer;
+    
+    const int m_branchLineWidth = 1;
 };
 
 #endif

@@ -3,9 +3,9 @@
 * its licensors.
 *
 * For complete copyright and license terms please see the LICENSE at the root of this
-* distribution(the "License").All use of this software is governed by the License,
-* or, if provided, by the license below or the license accompanying this file.Do not
-* remove or modify any license notices.This file is distributed on an "AS IS" BASIS,
+* distribution (the "License"). All use of this software is governed by the License,
+* or, if provided, by the license below or the license accompanying this file. Do not
+* remove or modify any license notices. This file is distributed on an "AS IS" BASIS,
 * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 *
 */
@@ -22,7 +22,11 @@
 #if !defined(CRY_USE_DX12_NATIVE)
 #define DEVICEWRAPPER12_D3D11_CPP_WRAP_DX11
 #if defined(AZ_RESTRICTED_PLATFORM)
-#include AZ_RESTRICTED_FILE(DeviceWrapper12_D3D11_cpp, AZ_RESTRICTED_PLATFORM)
+    #if defined(AZ_PLATFORM_XENIA)
+        #include "Xenia/DeviceWrapper12_D3D11_cpp_xenia.inl"
+    #elif defined(AZ_PLATFORM_PROVO)
+        #include "Provo/DeviceWrapper12_D3D11_cpp_provo.inl"
+    #endif
 #endif
 #if defined(DEVICEWRAPPER12_D3D11_CPP_WRAP_DX11)
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -132,8 +136,8 @@ bool CDeviceGraphicsPSO_DX11::Init(const CDeviceGraphicsPSODesc& psoDesc)
 
             const bool bMorph = false;
             const bool bInstanced = (streamMask & VSM_INSTANCED) != 0;
-            AZ::u32 declCacheCRC = pVsInstance->GenerateVertexDeclarationCacheCRC(psoDesc.m_VertexFormat);
-            SOnDemandD3DVertexDeclarationCache& declCache = rd->m_RP.m_D3DVertexDeclarationCache[streamMask >> 1][bMorph || bInstanced][declCacheCRC];
+            AZ::u32 declCacheKey = pVsInstance->GenerateVertexDeclarationCacheKey(psoDesc.m_VertexFormat);
+            SOnDemandD3DVertexDeclarationCache& declCache = rd->m_RP.m_D3DVertexDeclarationCache[streamMask >> 1][bMorph || bInstanced][declCacheKey];
 
             if (!declCache.m_pDeclaration)
             {

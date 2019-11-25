@@ -103,15 +103,15 @@ namespace EMStudio
         mDock->setMinimumHeight(100);
 
         // add functionality to the controls
-        connect(mDock, SIGNAL(visibilityChanged(bool)), this, SLOT(VisibilityChanged(bool)));
-        connect(mHierarchyWidget->GetTreeWidget(), SIGNAL(itemSelectionChanged()), this, SLOT(OnNodeChanged()));
+        connect(mDock, &MysticQt::DockWidget::visibilityChanged, this, &NodeWindowPlugin::VisibilityChanged);
+        connect(mHierarchyWidget->GetTreeWidget(), &QTreeWidget::itemSelectionChanged, this, &NodeWindowPlugin::OnNodeChanged);
 
         const AzQtComponents::FilteredSearchWidget* searchWidget = mHierarchyWidget->GetSearchWidget();
         connect(searchWidget, &AzQtComponents::FilteredSearchWidget::TextFilterChanged, this, &NodeWindowPlugin::OnTextFilterChanged);
 
-        connect(mHierarchyWidget->GetDisplayNodesButton(), SIGNAL(clicked()), this, SLOT(UpdateVisibleNodeIndices()));
-        connect(mHierarchyWidget->GetDisplayBonesButton(), SIGNAL(clicked()), this, SLOT(UpdateVisibleNodeIndices()));
-        connect(mHierarchyWidget->GetDisplayMeshesButton(), SIGNAL(clicked()), this, SLOT(UpdateVisibleNodeIndices()));
+        connect(mHierarchyWidget->GetDisplayNodesButton(), &QPushButton::clicked, this, &NodeWindowPlugin::UpdateVisibleNodeIndices);
+        connect(mHierarchyWidget->GetDisplayBonesButton(), &QPushButton::clicked, this, &NodeWindowPlugin::UpdateVisibleNodeIndices);
+        connect(mHierarchyWidget->GetDisplayMeshesButton(), &QPushButton::clicked, this, &NodeWindowPlugin::UpdateVisibleNodeIndices);
 
         // reinit the dialog
         ReInit();
@@ -160,7 +160,7 @@ namespace EMStudio
         // get access to the current selection list and clear the node selection
         CommandSystem::SelectionList& selection = CommandSystem::GetCommandManager()->GetCurrentSelection();
         selection.ClearNodeSelection();
-        mSelectedNodeIndices.Clear();
+        m_selectedNodeIndices.clear();
 
         AZStd::vector<SelectionItem>& selectedItems = mHierarchyWidget->GetSelectedItems();
 
@@ -194,7 +194,7 @@ namespace EMStudio
 
                 // add the node to the node selection
                 selection.AddNode(node);
-                mSelectedNodeIndices.Add(node->GetNodeIndex());
+                m_selectedNodeIndices.emplace(node->GetNodeIndex());
             }
             else if (node == nullptr && actorInstance)
             {
@@ -211,7 +211,7 @@ namespace EMStudio
 
         if (selectedInstance == nullptr)
         {
-            GetManager()->SetSelectedNodeIndices(mSelectedNodeIndices);
+            GetManager()->SetSelectedJointIndices(m_selectedNodeIndices);
             return;
         }
 
@@ -244,7 +244,7 @@ namespace EMStudio
         m_propertyWidget->InvalidateAll();
 
         // pass the selected node indices to the manager
-        GetManager()->SetSelectedNodeIndices(mSelectedNodeIndices);
+        GetManager()->SetSelectedJointIndices(m_selectedNodeIndices);
     }
 
 
@@ -270,7 +270,7 @@ namespace EMStudio
     void NodeWindowPlugin::UpdateVisibleNodeIndices()
     {
         // reset the visible nodes array
-        mVisibleNodeIndices.Clear();
+        m_visibleNodeIndices.clear();
 
         // get the currently selected actor instance
         const CommandSystem::SelectionList& selection       = CommandSystem::GetCommandManager()->GetCurrentSelection();
@@ -278,7 +278,7 @@ namespace EMStudio
         if (actorInstance == nullptr)
         {
             // make sure the empty visible nodes array gets passed to the manager, an empty array means all nodes are shown
-            GetManager()->SetVisibleNodeIndices(mVisibleNodeIndices);
+            GetManager()->SetVisibleJointIndices(m_visibleNodeIndices);
             return;
         }
 
@@ -293,7 +293,7 @@ namespace EMStudio
         const uint32 numNodes = actor->GetNumNodes();
 
         // reserve memory for the visible node indices
-        mVisibleNodeIndices.Reserve(numNodes);
+        m_visibleNodeIndices.reserve(numNodes);
 
         // extract the bones from the actor
         MCore::Array<uint32> boneList;
@@ -321,12 +321,12 @@ namespace EMStudio
                 (filterString.empty() || nodeName.find(filterString) != AZStd::string::npos))
             {
                 // this node is visible!
-                mVisibleNodeIndices.Add(nodeIndex);
+                m_visibleNodeIndices.emplace(nodeIndex);
             }
         }
 
         // pass it over to the manager
-        GetManager()->SetVisibleNodeIndices(mVisibleNodeIndices);
+        GetManager()->SetVisibleJointIndices(m_visibleNodeIndices);
     }
 
     //-----------------------------------------------------------------------------------------

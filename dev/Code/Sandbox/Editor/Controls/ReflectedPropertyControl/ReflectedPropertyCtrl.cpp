@@ -1,3 +1,14 @@
+/*
+* All or portions of this file Copyright (c) Amazon.com, Inc. or its affiliates, or 
+* a third party where indicated.
+*
+* For complete copyright and license terms please see the LICENSE at the root of this
+* distribution (the "License"). All use of this software is governed by the License,  
+* or, if provided, by the license below or the license accompanying this file. Do not
+* remove or modify any license notices. This file is distributed on an "AS IS" BASIS,
+* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  
+*
+*/
 #include "StdAfx.h"
 
 #include "Clipboard.h"
@@ -104,8 +115,15 @@ ReflectedPropertyItem* ReflectedPropertyControl::AddVarBlock(CVarBlock *varBlock
     //filter list based on search string
     if (!m_filterString.isEmpty())
     {
-        auto it = std::copy_if(variables.begin(), variables.end(), variables.begin(), [this](IVariable *var){return QString(var->GetName()).toLower().contains(m_filterString); });
-        variables.resize(std::distance(variables.begin(), it));  // shrink container to new size
+        AZStd::vector<IVariable*> newVariables;
+        for (IVariable* var : variables)
+        {
+            if (QString(var->GetName()).toLower().contains(m_filterString))
+            {
+                newVariables.emplace_back(var);
+            }
+        }
+        variables.swap(newVariables);
     }
 
     //sorting if needed.  sort first when grouping to make grouping easier

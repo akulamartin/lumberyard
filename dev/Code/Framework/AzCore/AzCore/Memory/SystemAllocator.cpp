@@ -9,7 +9,6 @@
 * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 *
 */
-#ifndef AZ_UNITY_BUILD
 
 #include <AzCore/Memory/SystemAllocator.h>
 #include <AzCore/Memory/AllocatorManager.h>
@@ -111,9 +110,9 @@ SystemAllocator::Create(const Descriptor& desc)
         }
         heapDesc.m_subAllocator = desc.m_heap.m_subAllocator;
         heapDesc.m_isPoolAllocations = desc.m_heap.m_isPoolAllocations;
-        //[DFLY][lehmille@] - Fix SystemAllocator from growing in small chunks
+        // Fix SystemAllocator from growing in small chunks
         heapDesc.m_systemChunkSize = desc.m_heap.m_systemChunkSize;
-        //[DFLY][lehmille@] - end
+
 #elif defined(AZCORE_SYS_ALLOCATOR_MALLOC)
         MallocSchema::Descriptor heapDesc;
 #else
@@ -188,8 +187,7 @@ SystemAllocator::Destroy()
 #ifdef AZCORE_ENABLE_MEMORY_TRACKING
     if (m_records)
     {
-        // print what allocation we have.
-        m_records->EnumerateAllocations(Debug::PrintAllocationsCB(true, true));
+        // m_records is created and destroyed by the MemoryDriller. AllocationRecords' destructor will print non-freed allocations
         EBUS_EVENT(Debug::MemoryDrillerBus, UnregisterAllocator, this);
     }
 #endif
@@ -279,9 +277,9 @@ SystemAllocator::Allocate(size_type byteSize, size_type alignment, int flags, co
 #ifdef AZCORE_ENABLE_MEMORY_TRACKING
     if (m_records)
     {
-#if defined(AZ_HAS_VARIADIC_TEMPLATES) && defined(AZ_DEBUG_BUILD)
+#if defined(AZ_DEBUG_BUILD)
         ++suppressStackRecord; // one more for the fact the ebus is a function
-#endif // AZ_HAS_VARIADIC_TEMPLATES
+#endif // AZ_DEBUG_BUILD
         EBUS_EVENT(Debug::MemoryDrillerBus, RegisterAllocation, this, address, byteSize, alignment, name, fileName, lineNum, suppressStackRecord + 1);
     }
 #endif // AZCORE_ENABLE_MEMORY_TRACKING
@@ -340,9 +338,9 @@ SystemAllocator::ReAllocate(pointer_type ptr, size_type newSize, size_type newAl
     if (m_records)
     {
         unsigned int suppressStackRecord = 1;
-#if defined(AZ_HAS_VARIADIC_TEMPLATES) && defined(AZ_DEBUG_BUILD)
+#if defined(AZ_DEBUG_BUILD)
         ++suppressStackRecord;
-#endif // AZ_HAS_VARIADIC_TEMPLATES
+#endif // AZ_DEBUG_BUILD
         EBUS_EVENT(Debug::MemoryDrillerBus, RegisterAllocation, this, newAddress, newSize, newAlignment, info.m_name, info.m_fileName, info.m_lineNum, suppressStackRecord);
     }
 #endif
@@ -389,5 +387,3 @@ SystemAllocator::AllocationSize(pointer_type ptr)
 #endif
     return allocSize;
 }
-
-#endif // #ifndef AZ_UNITY_BUILD

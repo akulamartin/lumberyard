@@ -3,9 +3,9 @@
 * its licensors.
 *
 * For complete copyright and license terms please see the LICENSE at the root of this
-* distribution(the "License").All use of this software is governed by the License,
-* or, if provided, by the license below or the license accompanying this file.Do not
-* remove or modify any license notices.This file is distributed on an "AS IS" BASIS,
+* distribution (the "License"). All use of this software is governed by the License,
+* or, if provided, by the license below or the license accompanying this file. Do not
+* remove or modify any license notices. This file is distributed on an "AS IS" BASIS,
 * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 *
 */
@@ -44,10 +44,13 @@ public:
     int                                 m_nRefCounter;
     int                                 m_nFrameLoad;
 
+    // Only do expensive DX12 resource set building for PC DX12
+#if defined(CRY_USE_DX12)
     // Compiled resource set.
     // For DX12 will prepare list of textures in the global heap.
     AZStd::shared_ptr<class CDeviceResourceSet>               m_pCompiledResourceSet;
     AZStd::shared_ptr<class CGraphicsPipelineStateLocalCache> m_pipelineStateCache;
+#endif
 
     uint8 m_nMtlLayerNoDrawFlags;
 

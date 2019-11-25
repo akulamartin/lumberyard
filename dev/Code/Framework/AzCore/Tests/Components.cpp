@@ -10,7 +10,6 @@
 *
 */
 
-#include "TestTypes.h"
 #include "FileIOBaseTestTypes.h"
 
 #include <AzCore/Math/Crc.h>
@@ -29,10 +28,12 @@
 
 #include <AzCore/Debug/FrameProfilerBus.h>
 #include <AzCore/Debug/FrameProfilerComponent.h>
-#include <AzCore/Debug/TraceMessageBus.h>
 #include <AzCore/Memory/AllocationRecords.h>
+#include <AzCore/UnitTest/TestTypes.h>
 
 #include <AzCore/std/parallel/containers/concurrent_unordered_set.h>
+
+#include "Utils.h"
 
 #if defined(HAVE_BENCHMARK)
 #include <benchmark/benchmark.h>
@@ -40,46 +41,6 @@
 
 using namespace AZ;
 using namespace AZ::Debug;
-
-#if defined(AZ_RESTRICTED_PLATFORM)
-#include AZ_RESTRICTED_FILE(Components_cpp, AZ_RESTRICTED_PLATFORM)
-#endif
-#if defined(AZ_RESTRICTED_SECTION_IMPLEMENTED)
-#undef AZ_RESTRICTED_SECTION_IMPLEMENTED
-#elif defined(AZ_PLATFORM_APPLE_IOS)
-#   define AZ_ROOT_TEST_FOLDER  "/Documents/"
-#elif defined(AZ_PLATFORM_APPLE_TV)
-#   define AZ_ROOT_TEST_FOLDER "/Library/Caches/"
-#elif defined(AZ_PLATFORM_LINUX) || defined(AZ_PLATFORM_APPLE_OSX)
-#   define AZ_ROOT_TEST_FOLDER  "./"
-#elif defined(AZ_PLATFORM_ANDROID)
-#   define AZ_ROOT_TEST_FOLDER  "/sdcard/"
-#else
-#   define AZ_ROOT_TEST_FOLDER  ""
-#endif
-
-namespace // anonymous
-{
-#if defined(AZ_PLATFORM_APPLE_IOS) || defined(AZ_PLATFORM_APPLE_TV)
-    AZStd::string GetTestFolderPath()
-    {
-        return AZStd::string(getenv("HOME")) + AZ_ROOT_TEST_FOLDER;
-    }
-    void MakePathFromTestFolder(char* buffer, int bufferLen, const char* fileName)
-    {
-        azsnprintf(buffer, bufferLen, "%s%s%s", getenv("HOME"), AZ_ROOT_TEST_FOLDER, fileName);
-    }
-#else
-    AZStd::string GetTestFolderPath()
-    {
-        return AZ_ROOT_TEST_FOLDER;
-    }
-    void MakePathFromTestFolder(char* buffer, int bufferLen, const char* fileName)
-    {
-        azsnprintf(buffer, bufferLen, "%s%s", AZ_ROOT_TEST_FOLDER, fileName);
-    }
-#endif
-} // anonymous namespace
 
 // This test needs to be outside of a fixture, as it needs to bring up its own allocators
 TEST(ComponentApplication, Test)
@@ -105,7 +66,7 @@ TEST(ComponentApplication, Test)
 
     // store the app state for next time
     char bootstrapFile[AZ_MAX_PATH_LEN];
-    MakePathFromTestFolder(bootstrapFile, AZ_MAX_PATH_LEN, "bootstrap.xml");
+    UnitTest::MakePathFromTestFolder(bootstrapFile, AZ_MAX_PATH_LEN, "bootstrap.xml");
     UnitTest::TestFileIOBase fileIO;
     UnitTest::SetRestoreFileIOBaseRAII restoreFileIOScope(fileIO);
     bool writeSuccess = app.WriteApplicationDescriptor(bootstrapFile);
@@ -130,7 +91,7 @@ namespace UnitTest
     {
     public:
         Components()
-            : AllocatorsFixture(128, false)
+            : AllocatorsFixture()
         {}
     };
 
@@ -228,6 +189,7 @@ namespace UnitTest
         ComponentApplication componentApp;
         ComponentApplication::Descriptor desc;
         desc.m_useExistingAllocator = true;
+        desc.m_enableDrilling = false; // we already created a memory driller for the test (AllocatorsFixture)
         ComponentApplication::StartupParameters startupParams;
         startupParams.m_allocator = &AZ::AllocatorInstance<AZ::SystemAllocator>::Get();
         Entity* systemEntity = componentApp.Create(desc, startupParams);
@@ -242,9 +204,9 @@ namespace UnitTest
         entity->SetId(newId);
         AZ_TEST_ASSERT(entity->GetId() == newId);
 
-        AZ_TEST_START_ASSERTTEST;
+        AZ_TEST_START_TRACE_SUPPRESSION;
         entity->SetId(SystemEntityId); // this is disallowed.
-        AZ_TEST_STOP_ASSERTTEST(1);
+        AZ_TEST_STOP_TRACE_SUPPRESSION(1);
 
         // we can always create components directly when we have the factory
         // but it is intended to be used in generic way...
@@ -270,9 +232,9 @@ namespace UnitTest
         // Make sure its NOT possible to set the id of the entity after INIT
         newId = AZ::Entity::MakeId();
         AZ::EntityId oldID = entity->GetId();
-        AZ_TEST_START_ASSERTTEST;
+        AZ_TEST_START_TRACE_SUPPRESSION;
         entity->SetId(newId); // this should not work because its init.
-        AZ_TEST_STOP_ASSERTTEST(1);
+        AZ_TEST_STOP_TRACE_SUPPRESSION(1);
         AZ_TEST_ASSERT(entity->GetId() == oldID); // id should be unaffected.
 
                                                   // try to send a component message, since it's not active nobody should listen to it
@@ -290,9 +252,9 @@ namespace UnitTest
 
         // Make sure its NOT possible to set the id of the entity after Activate
         newId = AZ::Entity::MakeId();
-        AZ_TEST_START_ASSERTTEST;
+        AZ_TEST_START_TRACE_SUPPRESSION;
         entity->SetId(newId); // this should not work because its init.
-        AZ_TEST_STOP_ASSERTTEST(1);
+        AZ_TEST_STOP_TRACE_SUPPRESSION(1);
 
         // test the tick events
         componentApp.Tick(); // first tick will set-up timers and have 0 delta time
@@ -300,25 +262,25 @@ namespace UnitTest
         componentApp.Tick(); // this will dispatch actual valid delta time
 
                              // make sure we can't remove components while active
-        AZ_TEST_START_ASSERTTEST;
+        AZ_TEST_START_TRACE_SUPPRESSION;
         AZ_TEST_ASSERT(entity->RemoveComponent(comp1) == false);
-        AZ_TEST_STOP_ASSERTTEST(1);
+        AZ_TEST_STOP_TRACE_SUPPRESSION(1);
 
             // make sure we can't add components while active
             {
                 SimpleComponent anotherComp;
-                AZ_TEST_START_ASSERTTEST;
+                AZ_TEST_START_TRACE_SUPPRESSION;
                 AZ_TEST_ASSERT(entity->AddComponent(&anotherComp) == false);
-                AZ_TEST_STOP_ASSERTTEST(1);
+                AZ_TEST_STOP_TRACE_SUPPRESSION(1);
             }
 
-            AZ_TEST_START_ASSERTTEST;
+            AZ_TEST_START_TRACE_SUPPRESSION;
             AZ_TEST_ASSERT(entity->CreateComponent<SimpleComponent>() == nullptr);
-            AZ_TEST_STOP_ASSERTTEST(1);
+            AZ_TEST_STOP_TRACE_SUPPRESSION(1);
 
-            AZ_TEST_START_ASSERTTEST;
+            AZ_TEST_START_TRACE_SUPPRESSION;
             AZ_TEST_ASSERT(entity->CreateComponent(azrtti_typeid<SimpleComponent>()) == nullptr);
-            AZ_TEST_STOP_ASSERTTEST(1);
+            AZ_TEST_STOP_TRACE_SUPPRESSION(1);
 
         // deactivate
         entity->Deactivate();
@@ -637,6 +599,21 @@ namespace UnitTest
     };
     //////////////////////////////////////////////////////////////////////////
 
+    //////////////////////////////////////////////////////////////////////////
+    // Component P - no services at all
+    class ComponentP
+        : public Component
+    {
+    public:
+        AZ_COMPONENT(ComponentP, "{0D71F310-FEBC-418D-9C4B-847C89DF6606}");
+
+        void Activate() override {}
+        void Deactivate() override {}
+
+        static void Reflect(ReflectContext* /*reflection*/) {}
+    };
+    //////////////////////////////////////////////////////////////////////////
+
     class ComponentDependency
         : public Components
     {
@@ -662,11 +639,13 @@ namespace UnitTest
             aznew ComponentM::DescriptorType;
             aznew ComponentN::DescriptorType;
             aznew ComponentO::DescriptorType;
+            aznew ComponentP::DescriptorType;
 
             m_componentApp = aznew ComponentApplication();
 
             ComponentApplication::Descriptor desc;
             desc.m_useExistingAllocator = true;
+            desc.m_enableDrilling = false; // we already created a memory driller for the test (AllocatorsFixture in Components)
 
             ComponentApplication::StartupParameters startupParams;
             startupParams.m_allocator = &AZ::AllocatorInstance<AZ::SystemAllocator>::Get();
@@ -852,14 +831,50 @@ namespace UnitTest
         EXPECT_LT(locationE2, locationB);
     }
 
+    TEST_F(ComponentDependency, ComponentsThatProvideNoServices_SortedLast)
+    {
+        // components providing no services
+        Component* c = m_entity->CreateComponent<ComponentC>(); // requires ServiceB
+        Component* p = m_entity->CreateComponent<ComponentP>();
+
+        // components providing a service
+        Component* b = m_entity->CreateComponent<ComponentB>();
+        Component* d = m_entity->CreateComponent<ComponentD>();
+        Component* i = m_entity->CreateComponent<ComponentI>();
+        Component* k = m_entity->CreateComponent<ComponentK>();
+
+        // the only dependency between these components is that C requires B
+
+        EXPECT_EQ(Entity::DependencySortResult::DSR_OK, m_entity->EvaluateDependencies());
+
+        const AZStd::vector<Component*>& components = m_entity->GetComponents();
+        const ptrdiff_t numComponents = m_entity->GetComponents().size();
+
+        ptrdiff_t maxIndexOfComponentProvidingServices = PTRDIFF_MIN;
+        for (Component* component : { b, d, i, k })
+        {
+            ptrdiff_t index = AZStd::distance(components.begin(), AZStd::find(components.begin(), components.end(), component));
+            EXPECT_TRUE(index >= 0 && index < numComponents);
+            maxIndexOfComponentProvidingServices = AZStd::max(maxIndexOfComponentProvidingServices, index);
+        }
+
+        ptrdiff_t minIndexOfComponentProvidingNoServices = PTRDIFF_MAX;
+        for (Component* component : { c, p })
+        {
+            ptrdiff_t index = AZStd::distance(components.begin(), AZStd::find(components.begin(), components.end(), component));
+            EXPECT_TRUE(index >= 0 && index < numComponents);
+            minIndexOfComponentProvidingNoServices = AZStd::min(minIndexOfComponentProvidingNoServices, index);
+        }
+
+        EXPECT_LT(maxIndexOfComponentProvidingServices, minIndexOfComponentProvidingNoServices);
+    }
+
     // there was once a bug where we didn't check requirements if there was only 1 component
     TEST_F(ComponentDependency, OneComponentRequiringService_FailsDueToMissingRequirements)
     {
         m_entity->CreateComponent<ComponentG>(); // requires ServiceH
 
-        AZ_TEST_START_ASSERTTEST;
         EXPECT_EQ(Entity::DependencySortResult::MissingRequiredService, m_entity->EvaluateDependencies());
-        AZ_TEST_STOP_ASSERTTEST(1);
     }
 
     // there was once a bug where we didn't check requirements of components that provided no services
@@ -868,9 +883,7 @@ namespace UnitTest
         m_entity->CreateComponent<ComponentC>(); // requires ServiceB
         m_entity->CreateComponent<ComponentC>(); // requires ServiceB
 
-        AZ_TEST_START_ASSERTTEST;
         EXPECT_EQ(Entity::DependencySortResult::MissingRequiredService, m_entity->EvaluateDependencies());
-        AZ_TEST_STOP_ASSERTTEST(1);
 
         // there was also once a bug where failed sorts would result in components vanishing
         EXPECT_EQ(2, m_entity->GetComponents().size());
@@ -888,9 +901,7 @@ namespace UnitTest
         m_entity->CreateComponent<ComponentI>(); // incompatible with ServiceI
         m_entity->CreateComponent<ComponentI>(); // incompatible with ServiceI
 
-        AZ_TEST_START_ASSERTTEST;
         EXPECT_EQ(Entity::DependencySortResult::HasIncompatibleServices, m_entity->EvaluateDependencies());
-        AZ_TEST_STOP_ASSERTTEST(1);
     }
 
     // there was once a bug where failures due to cyclic dependencies would result in components vanishing
@@ -905,12 +916,31 @@ namespace UnitTest
         EXPECT_EQ(2, m_entity->GetComponents().size());
     }
 
+    TEST_F(ComponentDependency, ComponentWithoutDescriptor_FailsDueToMissingDescriptor)
+    {
+        CreateComponents_ABCDE();
+
+        // delete ComponentB's descriptor
+        ComponentDescriptorBus::Event(azrtti_typeid<ComponentB>(), &ComponentDescriptorBus::Events::ReleaseDescriptor);
+
+        EXPECT_EQ(Entity::DependencySortResult::MissingDescriptor, m_entity->EvaluateDependencies());
+    }
+
     TEST_F(ComponentDependency, StableSort_GetsSameResultsEveryTime)
     {
         // put a bunch of components on the entity
         CreateComponents_ABCDE();
         CreateComponents_ABCDE();
         CreateComponents_ABCDE();
+
+        // throw in components whose dependencies could make the sort order ambiguous
+        m_entity->CreateComponent<ComponentI>(); // I is incompatible with itself, but depends on nothing
+        m_entity->CreateComponent<ComponentP>(); // P has no service declarations whatsoever
+        m_entity->CreateComponent<ComponentP>();
+        m_entity->CreateComponent<ComponentP>();
+        m_entity->CreateComponent<ComponentK>(); // K depends on J (but J not present)
+        m_entity->CreateComponent<ComponentK>();
+        m_entity->CreateComponent<ComponentK>();
 
         // set Component IDs (using seeded random) so we get same results each time this test runs
         u32 randSeed[] = { 1, 2, 3, 4, 5, 6, 7, 8 };
@@ -1022,9 +1052,7 @@ namespace UnitTest
         m_entity->CreateComponent<ComponentN>(); // incompatible with ServiceA twice
         m_entity->CreateComponent<ComponentA>();
 
-        AZ_TEST_START_ASSERTTEST;
         EXPECT_EQ(Entity::DependencySortResult::HasIncompatibleServices, m_entity->EvaluateDependencies());
-        AZ_TEST_STOP_ASSERTTEST(1);
     }
 
     TEST_F(ComponentDependency, ComponentAccidentallyListingIncompatibilityWithSelfTwice_IsOkByItself)
@@ -1039,9 +1067,7 @@ namespace UnitTest
         m_entity->CreateComponent<ComponentO>(); // incompatible with ServiceO twice
         m_entity->CreateComponent<ComponentO>(); // incompatible with ServiceO twice
 
-        AZ_TEST_START_ASSERTTEST;
         EXPECT_EQ(Entity::DependencySortResult::HasIncompatibleServices, m_entity->EvaluateDependencies());
-        AZ_TEST_STOP_ASSERTTEST(1);
     }
 
     /**
@@ -1090,7 +1116,7 @@ namespace UnitTest
 
         static void Reflect(AZ::SerializeContext* sc)
         {
-            sc->Class<MyUserSettings, UserSettings>()
+            sc->Class<MyUserSettings>()
                 ->Field("intOption1", &MyUserSettings::m_intOption1);
         }
 
@@ -1190,7 +1216,7 @@ namespace UnitTest
     {
     public:
         FrameProfilerComponentTest()
-            : AllocatorsFixture(15, false)
+            : AllocatorsFixture()
         {
         }
 
@@ -1278,6 +1304,7 @@ namespace UnitTest
             ComponentApplication app;
             ComponentApplication::Descriptor desc;
             desc.m_useExistingAllocator = true;
+            desc.m_enableDrilling = false;  // we already created a memory driller for the test (AllocatorsFixture)
             ComponentApplication::StartupParameters startupParams;
             startupParams.m_allocator = &AZ::AllocatorInstance<AZ::SystemAllocator>::Get();
             Entity* systemEntity = app.Create(desc, startupParams);
@@ -2145,11 +2172,11 @@ namespace Benchmark
             state.ResumeTiming();
 
             // do sort
-            Entity::DependencySortResult result = Entity::DependencySort(components);
+            Entity::DependencySortOutcome outcome = Entity::DependencySort(components);
 
             // cleanup
             state.PauseTiming();
-            AZ_Assert(result == Entity::DependencySortResult::Success, "Sort failed");
+            AZ_Assert(outcome.IsSuccess(), "Sort failed");
             for (Component* component : components)
             {
                 delete component;

@@ -44,7 +44,11 @@ static string GetLastErrorAsString()
 
 #if defined(AZ_RESTRICTED_PLATFORM)
 #define AZ_RESTRICTED_SECTION CRYTHREADUTIL_WIN32_THREAD_H_SECTION_1
-#include AZ_RESTRICTED_FILE(CryThreadUtil_win32_thread_h, AZ_RESTRICTED_PLATFORM)
+    #if defined(AZ_PLATFORM_XENIA)
+        #include "Xenia/CryThreadUtil_win32_thread_h_xenia.inl"
+    #elif defined(AZ_PLATFORM_PROVO)
+        #include "Provo/CryThreadUtil_win32_thread_h_provo.inl"
+    #endif
 #endif
 #if defined(AZ_RESTRICTED_SECTION_IMPLEMENTED)
 #undef AZ_RESTRICTED_SECTION_IMPLEMENTED
@@ -195,7 +199,11 @@ namespace CryThreadUtil
         unsigned int threadId = 0;
 #if defined(AZ_RESTRICTED_PLATFORM)
 #define AZ_RESTRICTED_SECTION CRYTHREADUTIL_WIN32_THREAD_H_SECTION_2
-#include AZ_RESTRICTED_FILE(CryThreadUtil_win32_thread_h, AZ_RESTRICTED_PLATFORM)
+    #if defined(AZ_PLATFORM_XENIA)
+        #include "Xenia/CryThreadUtil_win32_thread_h_xenia.inl"
+    #elif defined(AZ_PLATFORM_PROVO)
+        #include "Provo/CryThreadUtil_win32_thread_h_provo.inl"
+    #endif
 #endif
 #if defined(AZ_RESTRICTED_SECTION_IMPLEMENTED)
 #undef AZ_RESTRICTED_SECTION_IMPLEMENTED
@@ -426,11 +434,7 @@ namespace CryThreadUtil
     {
         uint temp = 0;
         _clearfp();
-#ifdef AZ_OS32
-        const unsigned int kAllowedBits = _MCW_DN | _MCW_EM | _MCW_RC | _MCW_IC | _MCW_PC;
-#else
         const unsigned int kAllowedBits = _MCW_DN | _MCW_EM | _MCW_RC;
-#endif
         _controlfp_s(&temp, nMask, kAllowedBits);
     }
 }

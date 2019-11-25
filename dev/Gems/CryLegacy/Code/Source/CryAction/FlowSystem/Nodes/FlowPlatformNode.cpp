@@ -69,7 +69,7 @@ public:
             }
 #if defined(WIN32) || defined(WIN64)
             ActivateOutput(pActInfo, eOutPort_Pc, GetPortAny(pActInfo, eInPort_Get));
-#elif defined(AZ_PLATFORM_APPLE_OSX)
+#elif defined(AZ_PLATFORM_MAC)
             ActivateOutput(pActInfo, eOutPort_Mac, GetPortAny(pActInfo, eInPort_Get));
 #elif defined(ANDROID)
             ActivateOutput(pActInfo, eOutPort_Android, GetPortAny(pActInfo, eInPort_Get));
@@ -78,7 +78,11 @@ public:
 #elif defined(APPLETV)
             ActivateOutput(pActInfo, eOutPort_AppleTV, GetPortAny(pActInfo, eInPort_Get));
 #elif defined(AZ_RESTRICTED_PLATFORM)
-#include AZ_RESTRICTED_FILE(FlowPlatformNode_cpp, AZ_RESTRICTED_PLATFORM)
+    #if defined(AZ_PLATFORM_XENIA)
+        #include "Xenia/FlowPlatformNode_cpp_xenia.inl"
+    #elif defined(AZ_PLATFORM_PROVO)
+        #include "Provo/FlowPlatformNode_cpp_provo.inl"
+    #endif
 #endif
         }
     }

@@ -41,7 +41,6 @@
             "Carrier/StreamSocketDriver.cpp",
             "Carrier/StreamSocketDriver.h",
             "Carrier/TrafficControl.h",
-            "Carrier/Utils.cpp",
             "Carrier/Utils.h"
         ],
         "Containers":
@@ -77,6 +76,7 @@
         "Replica":
         [
             "Replica/BasicHostChunkDescriptor.h",
+            "Replica/DeltaCompressedDataSet.h",
             "Replica/DataSet.cpp",
             "Replica/DataSet.h",
             "Replica/Interpolators.h",

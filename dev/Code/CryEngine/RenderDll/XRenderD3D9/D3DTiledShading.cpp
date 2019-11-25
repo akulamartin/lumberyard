@@ -166,7 +166,7 @@ void CTiledShading::CreateResources()
     if (!m_specularProbeAtlas.texArray)
     {
         ETEX_Format specProbeAtlasFormat = eTF_BC6UH;
-#if defined(AZ_PLATFORM_APPLE_OSX)
+#if defined(AZ_PLATFORM_MAC)
         specProbeAtlasFormat = eTF_R9G9B9E5;
 #endif
         m_specularProbeAtlas.texArray = CTexture::CreateTextureArray("$TiledSpecProbeTexArr", eTT_Cube, SpecProbeSize, SpecProbeSize, AtlasArrayDim, IntegerLog2(SpecProbeSize) - 1, 0, specProbeAtlasFormat);
@@ -179,14 +179,18 @@ void CTiledShading::CreateResources()
 
 #if defined(AZ_RESTRICTED_PLATFORM)
 #define AZ_RESTRICTED_SECTION D3DTILEDSHADING_CPP_SECTION_1
-#include AZ_RESTRICTED_FILE(D3DTiledShading_cpp, AZ_RESTRICTED_PLATFORM)
+    #if defined(AZ_PLATFORM_XENIA)
+        #include "Xenia/D3DTiledShading_cpp_xenia.inl"
+    #elif defined(AZ_PLATFORM_PROVO)
+        #include "Provo/D3DTiledShading_cpp_provo.inl"
+    #endif
 #endif
     }
 
     if (!m_diffuseProbeAtlas.texArray)
     {
         ETEX_Format diffuseProbeAtlasFormat = eTF_BC6UH;
-#if defined(AZ_PLATFORM_APPLE_OSX)
+#if defined(AZ_PLATFORM_MAC)
         diffuseProbeAtlasFormat = eTF_R9G9B9E5;
 #endif
         m_diffuseProbeAtlas.texArray = CTexture::CreateTextureArray("$TiledDiffuseProbeTexArr", eTT_Cube, DiffuseProbeSize, DiffuseProbeSize, AtlasArrayDim, 1, 0, diffuseProbeAtlasFormat);
@@ -199,7 +203,11 @@ void CTiledShading::CreateResources()
 
 #if defined(AZ_RESTRICTED_PLATFORM)
 #define AZ_RESTRICTED_SECTION D3DTILEDSHADING_CPP_SECTION_2
-#include AZ_RESTRICTED_FILE(D3DTiledShading_cpp, AZ_RESTRICTED_PLATFORM)
+    #if defined(AZ_PLATFORM_XENIA)
+        #include "Xenia/D3DTiledShading_cpp_xenia.inl"
+    #elif defined(AZ_PLATFORM_PROVO)
+        #include "Provo/D3DTiledShading_cpp_provo.inl"
+    #endif
 #endif
     }
 
@@ -216,7 +224,11 @@ void CTiledShading::CreateResources()
 
 #if defined(AZ_RESTRICTED_PLATFORM)
 #define AZ_RESTRICTED_SECTION D3DTILEDSHADING_CPP_SECTION_3
-#include AZ_RESTRICTED_FILE(D3DTiledShading_cpp, AZ_RESTRICTED_PLATFORM)
+    #if defined(AZ_PLATFORM_XENIA)
+        #include "Xenia/D3DTiledShading_cpp_xenia.inl"
+    #elif defined(AZ_PLATFORM_PROVO)
+        #include "Provo/D3DTiledShading_cpp_provo.inl"
+    #endif
 #endif
     }
 
@@ -662,7 +674,7 @@ void CTiledShading::PrepareLightList(TArray<SRenderLight>& envProbes, TArray<SRe
                 if (!ambientLight && lightIdx >= firstShadowLight && lightIdx < curShadowPoolLight)
                 {
                     int numDLights = rd->m_RP.m_DLights[nThreadID][nRecurseLevel].size();
-                    int frustumIdx = lightIdx + numDLights;
+                    int frustumIdx = renderLight.m_lightId + numDLights;
                     int startIdx = SRendItem::m_StartFrust[nThreadID][frustumIdx];
                     int endIdx = SRendItem::m_EndFrust[nThreadID][frustumIdx];
 
@@ -819,7 +831,7 @@ void CTiledShading::PrepareShadowCastersList(TArray<SRenderLight>& defLights)
         const SRenderLight& light = defLights[lightIdx];
         if (light.m_Flags & DLF_CASTSHADOW_MAPS)
         {
-            m_arrShadowCastingLights.Add(lightIdx);
+            m_arrShadowCastingLights.Add(light.m_lightId);
         }
     }
 }

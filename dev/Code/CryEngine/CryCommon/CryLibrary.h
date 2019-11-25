@@ -62,7 +62,11 @@ using InjectEnvironmentFunction = void(*)(void*);
 using DetachEnvironmentFunction = void(*)();
 
 #if defined(AZ_RESTRICTED_PLATFORM)
-    #include AZ_RESTRICTED_FILE(CryLibrary_h, AZ_RESTRICTED_PLATFORM)
+    #if defined(AZ_PLATFORM_XENIA)
+        #include "Xenia/CryLibrary_h_xenia.inl"
+    #elif defined(AZ_PLATFORM_PROVO)
+        #include "Provo/CryLibrary_h_provo.inl"
+    #endif
 #elif defined(WIN32)
     #if !defined(WIN32_LEAN_AND_MEAN)
         #define WIN32_LEAN_AND_MEAN
@@ -103,7 +107,7 @@ using DetachEnvironmentFunction = void(*)();
     }
 
     #define CRYLIBRARY_H_TRAIT_USE_WINDOWS_DLL 1
-#elif ((defined(LINUX) || defined(AZ_PLATFORM_APPLE)))
+#elif ((defined(LINUX) || AZ_TRAIT_OS_PLATFORM_APPLE))
     #include <dlfcn.h>
     #include <stdlib.h>
     #include <libgen.h>
@@ -113,7 +117,7 @@ using DetachEnvironmentFunction = void(*)();
 // for compatibility with code written for windows
     #define CrySharedLibrarySupported true
     #define CrySharedLibraryPrefix "lib"
-#if defined(AZ_PLATFORM_APPLE)
+#if AZ_TRAIT_OS_PLATFORM_APPLE
     #include <mach-o/dyld.h>
     #define CrySharedLibraryExtension ".dylib"
 #else
@@ -158,7 +162,7 @@ static HMODULE CryLoadLibrary(const char* libName, bool bLazy = false, bool bInM
                     exePath[len] = 0;
                     modulePath = dirname(exePath);
                 }
-            #elif defined(AZ_PLATFORM_APPLE)
+            #elif AZ_TRAIT_OS_PLATFORM_APPLE
                 uint32_t bufsize = MAX_PATH;
                 if (_NSGetExecutablePath(exePath, &bufsize) == 0)
                 {

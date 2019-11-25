@@ -23,6 +23,7 @@
 #include <AzCore/std/sort.h>
 
 #include <AzFramework/Entity/EntityContextBus.h>
+#include <AzToolsFramework/API/ComponentEntityObjectBus.h>
 #include <AzToolsFramework/Entity/EditorEntityHelpers.h>
 #include <AzToolsFramework/Entity/EditorEntitySortComponent.h>
 #include <AzToolsFramework/Slice/SliceMetadataEntityContextBus.h>
@@ -45,6 +46,7 @@ namespace
             // if only one is valid then technically they are different
             return (sourceElem || compareElem);
         }
+
         using namespace AzToolsFramework;
 
         InstanceDataHierarchy source;
@@ -56,13 +58,12 @@ namespace
         target.Build(serializeContext, AZ::SerializeContext::ENUM_ACCESS_FOR_READ);
 
         bool hasDifferences = false;
-
-        AZStd::function<void(const InstanceDataNode*)> nodeChanged =
+        const auto nodeChanged =
             [isRoot, &hasDifferences](const InstanceDataNode* rootNode)
         {
             const InstanceDataNode* node = rootNode;
 
-            // If the node has any un-hidden parent, count it as a difference.
+            // if the node has any unhidden parent, count it as a difference.
             while (node)
             {
                 if (!SliceUtilities::IsNodePushable(*node, isRoot))
@@ -81,33 +82,32 @@ namespace
             }
         };
 
-        InstanceDataHierarchy::NewNodeCB newCallback =
-            [&nodeChanged](InstanceDataNode* targetNode, AZStd::vector<AZ::u8>& /*data*/)
+        const auto newCallback = [&nodeChanged](
+            InstanceDataNode* targetNode, AZStd::vector<AZ::u8>& /*data*/)
         {
             nodeChanged(targetNode);
         };
 
-        InstanceDataHierarchy::RemovedNodeCB removedCallback =
-            [&nodeChanged](const InstanceDataNode* sourceNode, InstanceDataNode* /*targetNodeParent*/)
+        const auto removedCallback = [&nodeChanged](
+            const InstanceDataNode* sourceNode, InstanceDataNode* /*targetNodeParent*/)
         {
             nodeChanged(sourceNode);
         };
 
-        InstanceDataHierarchy::ChangedNodeCB changedCallback =
-            [&nodeChanged](const InstanceDataNode* sourceNode, InstanceDataNode* /*targetNode*/, AZStd::vector<AZ::u8>& /*sourceData*/, AZStd::vector<AZ::u8>& /*targetData*/)
+        const auto changedCallback = [&nodeChanged](
+            const InstanceDataNode* sourceNode, InstanceDataNode* /*targetNode*/,
+            AZStd::vector<AZ::u8>& /*sourceData*/, AZStd::vector<AZ::u8>& /*targetData*/)
         {
             nodeChanged(sourceNode);
         };
 
         InstanceDataHierarchy::CompareHierarchies(&source, &target,
             InstanceDataHierarchy::DefaultValueComparisonFunction,
-            serializeContext,
-            newCallback, removedCallback, changedCallback);
+            serializeContext, newCallback, removedCallback, changedCallback);
 
         return hasDifferences;
     }
 }
-
 
 namespace AzToolsFramework
 {
@@ -334,7 +334,14 @@ namespace AzToolsFramework
 
         if (entityId.IsValid())
         {
-            AddChildToParent(entityInfo.GetParent(), entityId);
+            if (m_gotInstantiateSliceDetails)
+            {
+                AddChildToParent(m_postInstantiateSliceParent, entityId);
+            }
+            else
+            {
+                AddChildToParent(entityInfo.GetParent(), entityId);
+            }
         }
 
         //re-parent any orphaned entities that may have either
@@ -416,6 +423,19 @@ namespace AzToolsFramework
 
         childInfo.SetParent(parentId);
 
+        bool isDuringUndoRedo = false;
+        AzToolsFramework::ToolsApplicationRequestBus::BroadcastResult(isDuringUndoRedo, &AzToolsFramework::ToolsApplicationRequestBus::Events::IsDuringUndoRedo);
+        if (isDuringUndoRedo)
+        {
+            // Undoing the parent entity's transform will first delete the parent entity and then re-create it with its 
+            // old transform. Keep child entities' local transform so they stay put in their parent's space after undo actions.
+            AZ::TransformBus::Event(childId, &AZ::TransformBus::Events::SetParentRelative, parentId);
+        }
+        else
+        {
+            AZ::TransformBus::Event(childId, &AZ::TransformBus::Events::SetParent, parentId);
+        }
+
         //creating/pushing slices doesn't always destroy/de-register the original entity before adding the replacement
         if (!parentInfo.HasChild(childId))
         {
@@ -429,12 +449,29 @@ namespace AzToolsFramework
         AZStd::unordered_map<AZ::EntityId, AZStd::pair<AZ::EntityId, AZ::u64>>::const_iterator orderItr = m_savedOrderInfo.find(childId);
         if (orderItr != m_savedOrderInfo.end() && orderItr->second.first == parentId)
         {
-            AzToolsFramework::RecoverEntitySortInfo(parentId, childId, orderItr->second.second);
+            bool sortOrderUpdated = AzToolsFramework::RecoverEntitySortInfo(parentId, childId, orderItr->second.second);
             m_savedOrderInfo.erase(childId);
+
+            // force notify the child sort order changed on the parent entity info, but only if the restore didn't actually modify
+            // the order internally (and sent ChildEntityOrderArrayUpdated).  that may seem heavy handed, and it is, but necessary
+            // to combat scenarios when the initial override detection returns a false positive (see comment about IDH comparisons
+            // in OnChildSortOrderChanged) and the slice instance source-to-live mapping hasn't been fully reconstructed yet.
+            if (!sortOrderUpdated)
+            {
+                parentInfo.OnChildSortOrderChanged();
+            }
         }
         else
         {
-            AzToolsFramework::AddEntityIdToSortInfo(parentId, childId, m_forceAddToBack);
+            if (m_gotInstantiateSliceDetails)
+            {
+                AzToolsFramework::AddEntityIdToSortInfo(parentId, childId, m_postInstantiateBeforeEntity);
+                m_gotInstantiateSliceDetails = false;
+            }
+            else
+            {
+                AzToolsFramework::AddEntityIdToSortInfo(parentId, childId, m_forceAddToBack);
+            }
         }
         childInfo.UpdateSliceInfo();
         childInfo.UpdateOrderInfo(true);
@@ -475,6 +512,35 @@ namespace AzToolsFramework
         childInfo.SetParent(AZ::EntityId());
         childInfo.UpdateSliceInfo();
         childInfo.UpdateOrderInfo(false);
+
+        RemoveFromAncestorCyclicDependencyList(parentId, childId);
+    }
+
+    void EditorEntityModel::RemoveFromAncestorCyclicDependencyList(const AZ::EntityId& parentId, const AZ::EntityId& entityId)
+    {
+        EditorEntityModelEntry& parentInfo = GetInfo(parentId);
+        if (parentInfo.GetCyclicDependencyList().size() == 0)
+        {
+            return;
+        }
+
+        // Remove the entity and its decendants from the cyclic dependency list of its ancestors
+        EditorEntityModelEntry& entityInfo = GetInfo(entityId);
+        AzToolsFramework::EntityIdList entitiesToRemove = entityInfo.GetCyclicDependencyList();
+        entitiesToRemove.push_back(entityId);
+
+        AZ::EntityId ancestorId = parentId;
+        while (ancestorId.IsValid())
+        {
+            for (const AZ::EntityId& entityToRemove : entitiesToRemove)
+            {
+                EditorEntityInfoRequestBus::Event(ancestorId, &AzToolsFramework::EditorEntityInfoRequestBus::Events::RemoveFromCyclicDependencyList, entityToRemove);
+            }
+
+            AZ::EntityId currentParentId = ancestorId;
+            ancestorId.SetInvalid();
+            EditorEntityInfoRequestBus::EventResult(ancestorId, currentParentId, &AzToolsFramework::EditorEntityInfoRequestBus::Events::GetParent);
+        }
     }
 
     void EditorEntityModel::ReparentChild(AZ::EntityId entityId, AZ::EntityId newParentId, AZ::EntityId oldParentId)
@@ -544,6 +610,20 @@ namespace AzToolsFramework
                 ProcessQueuedEntityAdds();
             }
         }
+    }
+
+    void EditorEntityModel::SetEntityInstantiationPosition(const AZ::EntityId& parent, const AZ::EntityId& beforeEntity)
+    {
+        m_postInstantiateBeforeEntity = beforeEntity;
+        m_postInstantiateSliceParent = parent;
+        m_gotInstantiateSliceDetails = true;
+    }
+
+    void EditorEntityModel::ClearEntityInstantiationPosition()
+    {
+        m_postInstantiateBeforeEntity.SetInvalid();
+        m_postInstantiateSliceParent.SetInvalid();
+        m_gotInstantiateSliceDetails = false;
     }
 
     void EditorEntityModel::EntityParentChanged(AZ::EntityId entityId, AZ::EntityId newParentId, AZ::EntityId oldParentId)
@@ -631,7 +711,9 @@ namespace AzToolsFramework
                 }
             }
 
-            EBUS_EVENT(ToolsApplicationEvents::Bus, InvalidatePropertyDisplay, Refresh_Values);
+            AzToolsFramework::ToolsApplicationEvents::Bus::Broadcast(
+                &AzToolsFramework::ToolsApplicationEvents::Bus::Events::InvalidatePropertyDisplay,
+                AzToolsFramework::Refresh_Values);
 
             UpdateSliceInfoHierarchy(replacedPair.second);
         }
@@ -646,6 +728,7 @@ namespace AzToolsFramework
         for (const auto& entityId : entityIdList)
         {
             UpdateSliceInfoHierarchy(entityId);
+            EditorEntityInfoNotificationBus::Broadcast(&EditorEntityInfoNotificationBus::Events::OnEntityInfoUpdateSliceOwnership, entityId);
         }
     }
 
@@ -727,6 +810,8 @@ namespace AzToolsFramework
 
     void EditorEntityModel::OnEntityTransformChanged(const AzToolsFramework::EntityIdList& entityIds)
     {
+        AZ_PROFILE_FUNCTION(AZ::Debug::ProfileCategory::AzToolsFramework);
+
         for (const AZ::EntityId& entityId : entityIds)
         {
             EditorEntityModelEntry& entityInfo = GetInfo(entityId);
@@ -827,6 +912,8 @@ namespace AzToolsFramework
         AZ_PROFILE_FUNCTION(AZ::Debug::ProfileCategory::AzToolsFramework);
         Disconnect();
 
+        // Ensure parent is invalid in case GetParentId doesn't have a parent to return a result
+        m_parentId.SetInvalid();
         AZ::TransformBus::EventResult(m_parentId, m_entityId, &AZ::TransformBus::Events::GetParentId);
         AzToolsFramework::ToolsApplicationRequestBus::BroadcastResult(m_selected, &AzToolsFramework::ToolsApplicationRequests::IsSelected, m_entityId);
         AzToolsFramework::EditorVisibilityRequestBus::EventResult(m_visible, m_entityId, &AzToolsFramework::EditorVisibilityRequests::GetVisibilityFlag);
@@ -851,6 +938,9 @@ namespace AzToolsFramework
         UpdateOrderInfo(false);
 
         m_connected = true;
+
+        // Visibility and lock state needs to be refreshed after connecting to the relevant buses.
+        ComponentEntityEditorRequestBus::Event(m_entityId, &ComponentEntityEditorRequestBus::Events::RefreshVisibilityAndLock);
     }
 
     void EditorEntityModel::EditorEntityModelEntry::Disconnect()
@@ -944,6 +1034,8 @@ namespace AzToolsFramework
                 }
             }
         }
+
+        UpdateCyclicDependencyInfo();
     }
 
     void EditorEntityModel::EditorEntityModelEntry::UpdateOrderInfo(bool notify)
@@ -1064,6 +1156,11 @@ namespace AzToolsFramework
         return m_sliceAssetName;
     }
 
+    AzToolsFramework::EntityIdList EditorEntityModel::EditorEntityModelEntry::GetCyclicDependencyList() const
+    {
+        return m_cyclicDependencyList;
+    }
+
     bool EditorEntityModel::EditorEntityModelEntry::IsSliceEntity() const
     {
         return (m_sliceFlags & SliceFlag_Entity) == SliceFlag_Entity;
@@ -1086,6 +1183,16 @@ namespace AzToolsFramework
         return (flags == SliceFlag_SubsliceRoot);
     }
 
+    bool EditorEntityModel::EditorEntityModelEntry::HasSliceEntityAnyChildrenAddedOrDeleted() const
+    {
+        return (m_sliceFlags & SliceFlag_EntityHasAdditionsDeletions) != 0;
+    }
+
+    bool EditorEntityModel::EditorEntityModelEntry::HasSliceEntityPropertyOverridesInTopLevel() const
+    {
+        return (m_sliceFlags & SliceFlag_EntityHasNonChildOverrides) != 0;
+    }
+
     bool EditorEntityModel::EditorEntityModelEntry::HasSliceEntityOverrides() const
     {
         return (m_sliceFlags & SliceFlag_EntityHasOverrides) != 0;
@@ -1093,12 +1200,35 @@ namespace AzToolsFramework
 
     bool EditorEntityModel::EditorEntityModelEntry::HasSliceChildrenOverrides() const
     {
-        return !m_overriddenChildren.empty();
+        return (!m_overriddenChildren.empty()) || HasSliceEntityAnyChildrenAddedOrDeleted();
     }
 
     bool EditorEntityModel::EditorEntityModelEntry::HasSliceAnyOverrides() const
     {
         return HasSliceEntityOverrides() || HasSliceChildrenOverrides();
+    }
+
+    bool EditorEntityModel::EditorEntityModelEntry::HasCyclicDependency() const
+    {
+        if (!IsSliceRoot() || m_cyclicDependencyList.size() == 0)
+        {
+            return false;
+        }
+
+        // Entities in m_cyclicDependencyList could have cyclic dependency on the ancestors of the current entity rather than the current entity itself
+        // Need to check the situation where none of the entities in the list has cyclic depdency on the current entity
+        for (const AZ::EntityId& entityId : m_cyclicDependencyList)
+        {
+            AZStd::string sliceAssetName = "";
+            EditorEntityInfoRequestBus::EventResult(sliceAssetName, entityId, &AzToolsFramework::EditorEntityInfoRequestBus::Events::GetSliceAssetName);
+
+            if (sliceAssetName == m_sliceAssetName)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     AZ::u64 EditorEntityModel::EditorEntityModelEntry::GetIndexForSorting() const
@@ -1115,15 +1245,77 @@ namespace AzToolsFramework
 
     bool EditorEntityModel::EditorEntityModelEntry::IsVisible() const
     {
+        // An entity being invisible always supercedes any other visibility state in the hierarchy.
+        if (!m_visible)
+        {
+            return m_visible;
+        }
+        // If this entity is in a layer that's not visible, then the entity is not visible.
+        if (DoesEntityHierarchyOverrideState([](AZ::EntityId hierarchyEntity) {
+            bool isHierarchyEntityVisible = true;
+            AzToolsFramework::Layers::EditorLayerComponentRequestBus::EventResult(
+                isHierarchyEntityVisible,
+                hierarchyEntity,
+                &AzToolsFramework::Layers::EditorLayerComponentRequestBus::Events::AreLayerChildrenVisible);
+            return !isHierarchyEntityVisible;
+        }))
+        {
+            return false;
+        }
         return m_visible;
     }
 
     bool EditorEntityModel::EditorEntityModelEntry::IsHidden() const
     {
-        return !m_visible;
+        return !IsVisible();
     }
 
     bool EditorEntityModel::EditorEntityModelEntry::IsLocked() const
+    {
+        // An entity being locked always supercedes any other lock state in the hierarchy.
+        if (m_locked)
+        {
+            return m_locked;
+        }
+        // If this entity is in a locked layer, then that layer's locked status supercedes this entity being unlocked.
+        if (DoesEntityHierarchyOverrideState([](AZ::EntityId hierarchyEntity) {
+            bool isHierarchyEntityLocked = false;
+            AzToolsFramework::EditorEntityInfoRequestBus::EventResult(
+                isHierarchyEntityLocked,
+                hierarchyEntity,
+                &AzToolsFramework::EditorEntityInfoRequestBus::Events::IsJustThisEntityLocked);
+            return isHierarchyEntityLocked;
+        }))
+        {
+            return true;
+        }
+        return m_locked;
+    }
+
+    bool EditorEntityModel::EditorEntityModelEntry::DoesEntityHierarchyOverrideState(EntityInHierarchyConditionFunction stateCheckFunction) const
+    {
+        bool result = false;
+        AZ::EntityId currentId = GetId();
+        while (currentId.IsValid())
+        {
+            AZ::EntityId parentId;
+            AzToolsFramework::EditorEntityInfoRequestBus::EventResult(parentId, currentId, &AzToolsFramework::EditorEntityInfoRequestBus::Events::GetParent);
+            currentId = parentId;
+            bool isParentLayer = false;
+            AzToolsFramework::Layers::EditorLayerComponentRequestBus::EventResult(
+                isParentLayer,
+                parentId,
+                &AzToolsFramework::Layers::EditorLayerComponentRequestBus::Events::HasLayer);
+            // Only layers in the hierarchy override the states checked for here.
+            if (isParentLayer && stateCheckFunction(parentId))
+            {
+                return true;
+            }
+        }
+        return result;
+    }
+
+    bool EditorEntityModel::EditorEntityModelEntry::IsJustThisEntityLocked() const
     {
         return m_locked;
     }
@@ -1187,7 +1379,7 @@ namespace AzToolsFramework
                 AZ::u8 lastFlags = m_sliceFlags;
                 m_sliceFlags = (m_name != m_sourceClone->GetName() ? m_sliceFlags | SliceFlag_EntityNameOverridden
                                                                    : m_sliceFlags & ~SliceFlag_EntityNameOverridden);
-                ModifyParentsOverriddenChildren(m_entityId, lastFlags, m_sliceFlags & SliceFlag_EntityHasOverrides);
+                ModifyParentsOverriddenChildren(m_entityId, lastFlags, (m_sliceFlags & SliceFlag_EntityHasOverrides) != 0);
             }
         }
     }
@@ -1196,6 +1388,8 @@ namespace AzToolsFramework
     {
         if (CanProcessOverrides())
         {
+            AZ_PROFILE_FUNCTION(AZ::Debug::ProfileCategory::AzToolsFramework);
+
             using TransformComponent = AzToolsFramework::Components::TransformComponent;
 
             if (AZ::Component* transformComponent = m_entity->FindComponent<TransformComponent>())
@@ -1209,6 +1403,8 @@ namespace AzToolsFramework
     {
         if (CanProcessOverrides())
         {
+            AZ_PROFILE_FUNCTION(AZ::Debug::ProfileCategory::AzToolsFramework);
+
             using EditorInspectorComponent = AzToolsFramework::Components::EditorInspectorComponent;
 
             if (AZ::Component* componentOrderComponent = m_entity->FindComponent<EditorInspectorComponent>())
@@ -1259,7 +1455,7 @@ namespace AzToolsFramework
             m_sliceFlags = (activeOnStart != m_sourceClone->IsRuntimeActiveByDefault()
                                 ? m_sliceFlags | SliceFlag_EntityActivationOverridden
                                 : m_sliceFlags & ~SliceFlag_EntityActivationOverridden);
-            ModifyParentsOverriddenChildren(m_entityId, lastFlags, m_sliceFlags & SliceFlag_EntityHasOverrides);
+            ModifyParentsOverriddenChildren(m_entityId, lastFlags, (m_sliceFlags & SliceFlag_EntityHasOverrides) != 0);
         }
     }
 
@@ -1322,38 +1518,46 @@ namespace AzToolsFramework
                         AZ::SliceComponent::SliceInstanceAddress sliceAddress;
                         AzFramework::EntityIdContextQueryBus::EventResult(sliceAddress, m_entityId, &AzFramework::EntityIdContextQueries::GetOwningSlice);
 
-                        const AZ::SliceComponent::EntityIdToEntityIdMap& liveToSourceIds = sliceAddress.GetInstance()->GetEntityIdToBaseMap();
-
                         bool isDifferent = false;
-                        for (int sortOrderIndex = 0; sortOrderIndex < liveChildSortOrder.size(); ++sortOrderIndex)
+                        if (!sliceAddress.GetInstance())
                         {
-                            const AZ::EntityId& liveId = liveChildSortOrder[sortOrderIndex];
-                            const AZ::EntityId& sourceId = sourceChildSortOrder[sortOrderIndex];
+                            isDifferent = true;
+                        }
+                        else
+                        {
+                            const AZ::SliceComponent::EntityIdToEntityIdMap& liveToSourceIds = sliceAddress.GetInstance()->GetEntityIdToBaseMap();
 
-                            if (liveId != sourceId)
+                            for (int sortOrderIndex = 0; sortOrderIndex < liveChildSortOrder.size(); ++sortOrderIndex)
                             {
-                                const auto& sourceMapping = liveToSourceIds.find(liveId);
-                                if (sourceMapping == liveToSourceIds.end()
-                                    || sourceMapping->second != sourceId)
+                                const AZ::EntityId& liveId = liveChildSortOrder[sortOrderIndex];
+                                const AZ::EntityId& sourceId = sourceChildSortOrder[sortOrderIndex];
+
+                                if (liveId != sourceId)
                                 {
-                                    isDifferent = true;
-                                    break;
+                                    const auto& sourceMapping = liveToSourceIds.find(liveId);
+                                    if (sourceMapping == liveToSourceIds.end()
+                                        || sourceMapping->second != sourceId)
+                                    {
+                                        isDifferent = true;
+                                        break;
+                                    }
                                 }
                             }
                         }
 
                         if (isDifferent)
                         {
-                            AddOverriddenComponent(componentId);
+                            AddChildAddedDeleted(componentId);
                         }
                         else
                         {
-                            RemoveOverriddenComponent(componentId);
+                            RemoveChildAddedDeleted(componentId);
+
                         }
                     }
                     else
                     {
-                        AddOverriddenComponent(componentId);
+                        AddChildAddedDeleted(componentId);
                     }
                 }
             }
@@ -1365,13 +1569,40 @@ namespace AzToolsFramework
         return (IsSliceEntity() && m_serializeContext && m_entity && m_sourceClone);
     }
 
+    void EditorEntityModel::EditorEntityModelEntry::AddChildAddedDeleted(AZ::ComponentId componentId)
+    {
+        m_addedRemovedComponents.insert(componentId);
+        AZ::u8 lastFlags = m_sliceFlags;
+        m_sliceFlags |= SliceFlag_EntityHasAdditionsDeletions;
+
+        ModifyParentsOverriddenChildren(m_entityId, lastFlags, (m_sliceFlags & SliceFlag_EntityHasOverrides) != 0);
+        AzToolsFramework::ToolsApplicationEvents::Bus::Broadcast(
+            &AzToolsFramework::ToolsApplicationEvents::Bus::Events::InvalidatePropertyDisplay,
+            AzToolsFramework::Refresh_Values);
+    }
+
+    void EditorEntityModel::EditorEntityModelEntry::RemoveChildAddedDeleted(AZ::ComponentId componentId)
+    {
+        m_addedRemovedComponents.erase(componentId);
+        AZ::u8 lastFlags = m_sliceFlags;
+        if (m_addedRemovedComponents.empty())
+        {
+            m_sliceFlags &= ~SliceFlag_EntityHasAdditionsDeletions;
+        }
+
+        ModifyParentsOverriddenChildren(m_entityId, lastFlags, (m_sliceFlags & SliceFlag_EntityHasOverrides) != 0);
+        AzToolsFramework::ToolsApplicationEvents::Bus::Broadcast(
+            &AzToolsFramework::ToolsApplicationEvents::Bus::Events::InvalidatePropertyDisplay,
+            AzToolsFramework::Refresh_Values);
+    }
+
     void EditorEntityModel::EditorEntityModelEntry::AddOverriddenComponent(AZ::ComponentId componentId)
     {
         m_overriddenComponents.insert(componentId);
         AZ::u8 lastFlags = m_sliceFlags;
         m_sliceFlags |= SliceFlag_EntityComponentsOverridden;
 
-        ModifyParentsOverriddenChildren(m_entityId, lastFlags, m_sliceFlags & SliceFlag_EntityHasOverrides);
+        ModifyParentsOverriddenChildren(m_entityId, lastFlags, (m_sliceFlags & SliceFlag_EntityHasOverrides) != 0);
         AzToolsFramework::ToolsApplicationEvents::Bus::Broadcast(
             &AzToolsFramework::ToolsApplicationEvents::Bus::Events::InvalidatePropertyDisplay,
             AzToolsFramework::Refresh_Values);
@@ -1386,7 +1617,7 @@ namespace AzToolsFramework
             m_sliceFlags &= ~SliceFlag_EntityComponentsOverridden;
         }
 
-        ModifyParentsOverriddenChildren(m_entityId, lastFlags, m_sliceFlags & SliceFlag_EntityHasOverrides);
+        ModifyParentsOverriddenChildren(m_entityId, lastFlags, (m_sliceFlags & SliceFlag_EntityHasOverrides) != 0);
         AzToolsFramework::ToolsApplicationEvents::Bus::Broadcast(
             &AzToolsFramework::ToolsApplicationEvents::Bus::Events::InvalidatePropertyDisplay,
             AzToolsFramework::Refresh_Values);
@@ -1412,6 +1643,7 @@ namespace AzToolsFramework
 
         m_sliceFlags &= ~SliceFlag_EntityHasOverrides;
         m_overriddenComponents.clear();
+        m_addedRemovedComponents.clear();
 
         // reset the cached entity name so we can leverage OnEntityNameChanged to detect if the name is overridden and avoid duplicate code
         m_name = "";
@@ -1460,11 +1692,33 @@ namespace AzToolsFramework
             m_sliceFlags |= SliceFlag_EntityComponentsOverridden;
         }
 
-        ModifyParentsOverriddenChildren(m_entityId, lastFlags, m_sliceFlags & SliceFlag_EntityHasOverrides);
+        ModifyParentsOverriddenChildren(m_entityId, lastFlags, (m_sliceFlags & SliceFlag_EntityHasOverrides) != 0);
     }
 
+    bool EditorEntityModel::EditorEntityModelEntry::IsComponentExpanded(AZ::ComponentId id) const
+    {
+        auto expandedItr = m_componentExpansionStateMap.find(id);
+        return (expandedItr == m_componentExpansionStateMap.end() || expandedItr->second);
+    }
+
+    void EditorEntityModel::EditorEntityModelEntry::SetComponentExpanded(AZ::ComponentId id, bool expanded)
+    {
+        if (expanded)
+        {
+            // We can simply erase the element if it is expanded since not present equates to expanded.
+            // This should keep our data stored to a minimum
+            m_componentExpansionStateMap.erase(id);
+        }
+        else
+        {
+            m_componentExpansionStateMap[id] = expanded;
+        }
+    }
+    
     void EditorEntityModel::EditorEntityModelEntry::ModifyParentsOverriddenChildren(AZ::EntityId childEntityId, AZ::u8 lastFlags, bool childHasOverrides)
     {
+        AZ_PROFILE_FUNCTION(AZ::Debug::ProfileCategory::AzToolsFramework);
+
         if (((lastFlags & SliceFlag_EntityHasOverrides) == 0) != ((m_sliceFlags & SliceFlag_EntityHasOverrides) == 0))
         {
             AZStd::vector<AZ::EntityId> parentsIds;
@@ -1490,6 +1744,76 @@ namespace AzToolsFramework
                 EditorEntityModelRequestBus::Broadcast(&EditorEntityModelRequestBus::Events::RemoveFromChildrenWithOverrides,
                     parentsIds, childEntityId);
             }
+        }
+    }
+
+    void EditorEntityModel::EditorEntityModelEntry::UpdateCyclicDependencyInfo()
+    {
+        AZ_PROFILE_FUNCTION(AZ::Debug::ProfileCategory::AzToolsFramework);
+
+        // Only check cyclic dependency if the current entity is a slice root
+        if (!IsSliceRoot())
+        {
+            return;
+        }
+
+        AZ::SliceComponent::SliceInstanceAddress sliceAddress;
+        AzFramework::EntityIdContextQueryBus::EventResult(sliceAddress, m_entityId, &AzFramework::EntityIdContextQueries::GetOwningSlice);
+
+        AzToolsFramework::EntityIdList cyclicDependencyChain;
+
+        AZ::EntityId parentId = GetParent();
+
+        while (parentId.IsValid())
+        {
+            cyclicDependencyChain.push_back(parentId);
+
+            bool parentIsSliceRoot = false;
+            EditorEntityInfoRequestBus::EventResult(parentIsSliceRoot, parentId, &AzToolsFramework::EditorEntityInfoRequestBus::Events::IsSliceRoot);
+            
+            // Only check cyclic dependency on slice root entities
+            if (parentIsSliceRoot)
+            {
+                AZ::SliceComponent::SliceInstanceAddress parentSliceAddress;
+                AzFramework::EntityIdContextQueryBus::EventResult(parentSliceAddress, parentId, &AzFramework::EntityIdContextQueries::GetOwningSlice);
+
+                if (!AzToolsFramework::SliceUtilities::CheckSliceAdditionCyclicDependencySafe(sliceAddress, parentSliceAddress))
+                {
+                    // Cyclic dependency is detected
+                    break;
+                }
+            }
+
+            AZ::EntityId currentParentId = parentId;
+            parentId.SetInvalid();
+            EditorEntityInfoRequestBus::EventResult(parentId, currentParentId, &AzToolsFramework::EditorEntityInfoRequestBus::Events::GetParent);
+        }
+
+        // Update the cyclic denpendency list of each ancestor entity
+        if (parentId.IsValid())
+        {
+            for (const AZ::EntityId& entityId : cyclicDependencyChain)
+            {
+                EditorEntityInfoRequestBus::Event(entityId, &AzToolsFramework::EditorEntityInfoRequestBus::Events::AddToCyclicDependencyList, m_entityId);
+            }
+        }
+    }
+
+    void EditorEntityModel::EditorEntityModelEntry::AddToCyclicDependencyList(const AZ::EntityId& entityId)
+    {
+        // Each entity in this list has circular dependency on the current entity or its ancenstor
+        if(AZStd::find(m_cyclicDependencyList.begin(), m_cyclicDependencyList.end(), entityId) == m_cyclicDependencyList.end())
+        {
+            m_cyclicDependencyList.push_back(entityId);
+        }
+    }
+
+    void EditorEntityModel::EditorEntityModelEntry::RemoveFromCyclicDependencyList(const AZ::EntityId& entityId)
+    {
+        AzToolsFramework::EntityIdList::iterator it = AZStd::find(m_cyclicDependencyList.begin(), m_cyclicDependencyList.end(), entityId);
+        if (it != m_cyclicDependencyList.end())
+        {
+            m_cyclicDependencyList.erase(it);
         }
     }
 }   // namespace AzToolsFramework

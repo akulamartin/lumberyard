@@ -14,6 +14,7 @@
 
 #include <EMotionFX/Source/EMotionFXConfig.h>
 #include <EMotionFX/Source/AnimGraphTransitionCondition.h>
+#include <EMotionFX/Source/ObjectAffectedByParameterChanges.h>
 
 
 namespace EMotionFX
@@ -28,9 +29,10 @@ namespace EMotionFX
      */
     class EMFX_API AnimGraphParameterCondition
         : public AnimGraphTransitionCondition
+        , public ObjectAffectedByParameterChanges
     {
     public:
-        AZ_RTTI(AnimGraphParameterCondition, "{458D0D08-3F1E-4116-89FC-50F447EDC84E}", AnimGraphTransitionCondition)
+        AZ_RTTI(AnimGraphParameterCondition, "{458D0D08-3F1E-4116-89FC-50F447EDC84E}", AnimGraphTransitionCondition, ObjectAffectedByParameterChanges)
         AZ_CLASS_ALLOCATOR_DECL
 
         enum EFunction : AZ::u8
@@ -51,9 +53,24 @@ namespace EMotionFX
             STRINGFUNCTION_NOTEQUAL_CASESENSITIVE   = 1
         };
 
-        AnimGraphParameterCondition();
+        class EMFX_API UniqueData
+            : public AnimGraphObjectData
+        {
+            EMFX_ANIMGRAPHOBJECTDATA_IMPLEMENT_LOADSAVE
+
+        public:
+            AZ_CLASS_ALLOCATOR_DECL
+
+            UniqueData() = default;
+            UniqueData(AnimGraphObject* object, AnimGraphInstance* animGraphInstance);
+            ~UniqueData() override = default;
+
+        public:
+            float m_timer = 0.0f;
+        };
+
+        AnimGraphParameterCondition() = default;
         AnimGraphParameterCondition(AnimGraph* animGraph);
-        ~AnimGraphParameterCondition();
 
         void Reinit() override;
         bool InitAfterLoading(AnimGraph* animGraph) override;
@@ -63,6 +80,9 @@ namespace EMotionFX
         const char* GetPaletteName() const override;
 
         bool TestCondition(AnimGraphInstance* animGraphInstance) const override;
+        void OnUpdateUniqueData(AnimGraphInstance* animGraphInstance) override;
+        void Update(AnimGraphInstance* animGraphInstance, float timePassedInSeconds) override;
+        void Reset(AnimGraphInstance* animGraphInstance) override;
 
         // float
         void SetFunction(EFunction func);
@@ -85,6 +105,19 @@ namespace EMotionFX
         const AZStd::string& GetParameterName() const;
         AZ::TypeId GetParameterType() const;
         bool IsFloatParameter() const;
+
+        float GetTimeRequirement() const;
+        void SetTimeRequirement(float seconds);
+
+        // ParameterDrivenPorts
+        AZStd::vector<AZStd::string> GetParameters() const override;
+        AnimGraph* GetParameterAnimGraph() const override;
+        void ParameterMaskChanged(const AZStd::vector<AZStd::string>& newParameterMask) override;
+        void AddRequiredParameters(AZStd::vector<AZStd::string>& parameterNames) const override;
+        void ParameterAdded(size_t newParameterIndex) override;
+        void ParameterRenamed(const AZStd::string& oldParameterName, const AZStd::string& newParameterName) override;
+        void ParameterOrderChanged(const ValueParameterVector& beforeChange, const ValueParameterVector& afterChange) override;
+        void ParameterRemoved(const AZStd::string& oldParameterName) override;
 
         static void Reflect(AZ::ReflectContext* context);
 
@@ -120,15 +153,15 @@ namespace EMotionFX
 
         AZStd::string                       m_parameterName;
         AZStd::string                       m_testString;
-        AZ::Outcome<size_t>                 m_parameterIndex;
-        BlendConditionParamValueFunction    m_testFunction;
-        EStringFunction                     m_stringFunction;
-        EFunction                           m_function;
-        float                               m_testValue;
-        float                               m_rangeValue;
+        AZ::Outcome<size_t>                 m_parameterIndex = AZ::Failure();
+        BlendConditionParamValueFunction    m_testFunction = TestGreater;
+        EStringFunction                     m_stringFunction = STRINGFUNCTION_EQUAL_CASESENSITIVE;
+        EFunction                           m_function = FUNCTION_GREATER;
+        float                               m_testValue = 0.0f;
+        float                               m_rangeValue = 0.0f;
+        float                               m_timeRequirement = 0.0f;
     };
 } // namespace EMotionFX
-
 
 namespace AZ
 {

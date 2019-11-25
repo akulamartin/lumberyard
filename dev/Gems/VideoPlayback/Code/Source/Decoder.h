@@ -19,21 +19,13 @@
 
 #include <AzCore/std/string/string.h>
 #include <AzCore/std/parallel/thread.h>
-#include <AzCore/std/parallel/conditional_variable.h>
+#include <AzCore/std/parallel/condition_variable.h>
 #include <AzCore/std/parallel/mutex.h>
 #include <AzCore/std/parallel/atomic.h>
 #include <AzCore/std/parallel/semaphore.h>
+#include <VideoPlayback_Traits_Platform.h>
 
-#if defined AZ_RESTRICTED_PLATFORM
-#include AZ_RESTRICTED_FILE(Decoder_h, AZ_RESTRICTED_PLATFORM)
-#endif
-#if defined(AZ_RESTRICTED_SECTION_IMPLEMENTED)
-#undef AZ_RESTRICTED_SECTION_IMPLEMENTED
-#else
-#define AZ_VIDEOPLAYBACK_GEM_TRAIT_ENABLE_DECODER 1
-#endif
-
-#if AZ_VIDEOPLAYBACK_GEM_TRAIT_ENABLE_DECODER
+#if AZ_TRAIT_VIDEOPLAYBACK_ENABLE_DECODER
 extern "C"
 {
     #pragma warning( disable : 4244 )   //Disable warning for libav

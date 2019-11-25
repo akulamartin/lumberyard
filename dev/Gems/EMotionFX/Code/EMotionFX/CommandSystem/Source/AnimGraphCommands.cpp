@@ -25,6 +25,7 @@
 #include <EMotionFX/Source/ActorManager.h>
 #include <EMotionFX/Source/MotionManager.h>
 #include <EMotionFX/Source/MotionSystem.h>
+#include <EMotionFX/Source/Recorder.h>
 #include <EMotionFX/Source/Importer/Importer.h>
 #include <EMotionFX/Exporters/ExporterLib/Exporter/ExporterFileProcessor.h>
 #include <AzFramework/API/ApplicationAPI.h>
@@ -101,7 +102,6 @@ namespace CommandSystem
         }
         mOldAnimGraphID = animGraph->GetID();
 
-        animGraph->Reinit();
         animGraph->UpdateUniqueData();
 
         // return the id of the newly created anim graph
@@ -216,7 +216,7 @@ namespace CommandSystem
         }
         mPreviouslyUsedID = animGraph->GetID();
 
-        animGraph->Reinit();
+        animGraph->RecursiveReinit();
         animGraph->UpdateUniqueData();
 
         // register master animgraph
@@ -304,7 +304,7 @@ namespace CommandSystem
             for (uint32 i = 0; i < EMotionFX::GetAnimGraphManager().GetNumAnimGraphs();)
             {
                 EMotionFX::AnimGraph* animGraph = EMotionFX::GetAnimGraphManager().GetAnimGraph(i);
-                if (!animGraph->GetIsOwnedByRuntime())
+                if (!animGraph->GetIsOwnedByRuntime() && !animGraph->GetIsOwnedByAsset())
                 {
                     m_oldFileNamesAndIds.emplace_back(animGraph->GetFileName(), animGraph->GetID());
                     if (!GetCommandManager()->ExecuteCommandInsideCommand(AZStd::string::format("RemoveAnimGraph -animGraphID %d", animGraph->GetID()), outResult))
@@ -338,6 +338,9 @@ namespace CommandSystem
             return false;
         }
 
+        // unselect all anim graphs
+        GetCommandManager()->ExecuteCommandInsideCommand("Unselect -animGraphIndex SELECT_ALL", outResult);
+
         // remove the given anim graph
         m_oldFileNamesAndIds.emplace_back(animGraph->GetFileName(), animGraph->GetID());
         uint32 oldIndex = EMotionFX::GetAnimGraphManager().FindAnimGraphIndex(animGraph);
@@ -360,9 +363,6 @@ namespace CommandSystem
         // get rid of the anim graph
         EMotionFX::GetAnimGraphManager().RemoveAnimGraph(animGraph);
 
-        // unselect all anim graphs
-        GetCommandManager()->ExecuteCommandInsideCommand("Unselect -animGraphIndex SELECT_ALL", outResult);
-
         // Reselect the anim graph at the index of the removed one if possible.
         const int numAnimGraphs = EMotionFX::GetAnimGraphManager().GetNumAnimGraphs();
         for (int indexToSelect = oldIndex; indexToSelect >= 0; indexToSelect--)
@@ -373,8 +373,8 @@ namespace CommandSystem
                 break;
             }
 
-            EMotionFX::AnimGraph* selectionCandiate = EMotionFX::GetAnimGraphManager().GetAnimGraph(indexToSelect);
-            if (!selectionCandiate->GetIsOwnedByRuntime())
+            EMotionFX::AnimGraph* selectionCandidate = EMotionFX::GetAnimGraphManager().GetAnimGraph(indexToSelect);
+            if (!selectionCandidate->GetIsOwnedByRuntime())
             {
                 const EMotionFX::AnimGraph* newSelectedAnimGraph = EMotionFX::GetAnimGraphManager().GetAnimGraph(indexToSelect);
                 GetCommandManager()->ExecuteCommandInsideCommand(AZStd::string::format("Select -animGraphID %d", newSelectedAnimGraph->GetID()), outResult);
@@ -563,6 +563,9 @@ namespace CommandSystem
             mOldMotionSetUsed = (animGraphInstanceMotionSet) ? animGraphInstanceMotionSet->GetID() : MCORE_INVALIDINDEX32;
             mOldVisualizeScaleUsed = animGraphInstance->GetVisualizeScale();
 
+            // Stores the old anim graph instance. Later in the callback we will use it to validate the model item.
+            m_oldAnimGraphInstance = animGraphInstance;
+
             // check if the anim graph is valid
             if (animGraph)
             {
@@ -597,6 +600,7 @@ namespace CommandSystem
             // store the currently used ID as invalid
             mOldAnimGraphUsed = MCORE_INVALIDINDEX32;
             mOldMotionSetUsed = MCORE_INVALIDINDEX32;
+            m_oldAnimGraphInstance = nullptr;
 
             // check if the anim graph is valid
             if (animGraph)
@@ -605,14 +609,8 @@ namespace CommandSystem
                 animGraphInstance = EMotionFX::AnimGraphInstance::Create(animGraph, actorInstance, motionSet);
                 animGraphInstance->SetVisualizeScale(visualizeScale);
 
-                // set the anim graph instance
                 actorInstance->SetAnimGraphInstance(animGraphInstance);
-
-                // update unique datas
                 animGraphInstance->UpdateUniqueData();
-
-                animGraph->Reinit();
-                animGraph->UpdateUniqueData();
             }
         }
 
@@ -628,6 +626,18 @@ namespace CommandSystem
         if (animGraph)
         {
             GetCommandManager()->ExecuteCommandInsideCommand(AZStd::string::format("Select -animGraphID %d", animGraph->GetID()), resultString);
+        }
+
+        if (parameters.GetValueAsBool("startRecording", this))
+        {
+            EMotionFX::Recorder::RecordSettings settings;
+            settings.mFPS = 1000000;
+            settings.mRecordTransforms = true;
+            settings.mRecordAnimGraphStates = true;
+            settings.mRecordNodeHistory = true;
+            settings.mRecordScale = true;
+            settings.mInitialAnimGraphAnimBytes = 4 * 1024 * 1024; // 4 mb
+            EMotionFX::GetRecorder().StartRecording(settings);
         }
 
         // done
@@ -769,6 +779,7 @@ namespace CommandSystem
         GetSyntax().AddParameter("motionSetID",         "The id of the motion set.",        MCore::CommandSyntax::PARAMTYPE_INT,    "-1");
         GetSyntax().AddParameter("motionSetIndex",      "The index of the motion set.",     MCore::CommandSyntax::PARAMTYPE_INT,    "-1");
         GetSyntax().AddParameter("visualizeScale",      "The visualize scale.",             MCore::CommandSyntax::PARAMTYPE_FLOAT,  "1.0");
+        GetSyntax().AddParameter("startRecording",      "Start a recording as soon as the activation occurs", MCore::CommandSyntax::PARAMTYPE_BOOLEAN, "false");
     }
 
 
@@ -830,7 +841,7 @@ namespace CommandSystem
                     const EMotionFX::AnimGraph* animGraph = EMotionFX::GetAnimGraphManager().GetAnimGraph(j);
 
                     if (animGraph &&
-                        !animGraph->GetIsOwnedByRuntime() &&
+                        !animGraph->GetIsOwnedByRuntime() && !animGraph->GetIsOwnedByAsset() &&
                         AzFramework::StringFunc::Equal(animGraph->GetFileName(), filenames[i].c_str(), false /* no case */))
                     {
                         commandString = AZStd::string::format("RemoveAnimGraph -animGraphID %d", animGraph->GetID());

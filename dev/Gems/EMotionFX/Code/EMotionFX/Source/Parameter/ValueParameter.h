@@ -29,6 +29,7 @@ namespace EMotionFX
         : public Parameter
     {
     public:
+        
         AZ_RTTI(ValueParameter, "{46549C79-6B4C-4DDE-A5E3-E5FBEC455816}", Parameter)
         AZ_CLASS_ALLOCATOR_DECL
 
@@ -41,8 +42,8 @@ namespace EMotionFX
         virtual uint32 GetType() const = 0;
         virtual bool AssignDefaultValueToAttribute(MCore::Attribute* attribute) const = 0;
         virtual bool SetDefaultValueFromAttribute(MCore::Attribute* attribute) = 0;
-        virtual bool SetMinValueFromAttribute(MCore::Attribute* attribute) { return false; }
-        virtual bool SetMaxValueFromAttribute(MCore::Attribute* attribute) { return false; }
+        virtual bool SetMinValueFromAttribute(MCore::Attribute* attribute) { AZ_UNUSED(attribute); return false; }
+        virtual bool SetMaxValueFromAttribute(MCore::Attribute* attribute) { AZ_UNUSED(attribute); return false; }
     };
 
     typedef AZStd::vector<ValueParameter*> ValueParameterVector;

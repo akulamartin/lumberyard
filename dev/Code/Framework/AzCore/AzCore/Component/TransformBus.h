@@ -40,6 +40,8 @@ namespace AZ
         : public ComponentBus
     {
     public:
+        AZ_RTTI(TransformInterface, "{8DD8A4E2-7F61-4A36-9169-A31F03E25FEB}");
+
         //////////////////////////////////////////////////////////////////////////
         // EBusTraits overrides - application is a singleton.
         /**
@@ -604,6 +606,14 @@ namespace AZ
         */
         virtual void OnStaticChanged( bool /*isStatic*/) { }
 
+        /**
+         * Called right before a parent change, to allow listeners to prevent the entity's parent from changing.
+         * @param parentCanChange A reference used to track if the parent can change. A result parameter is used
+         *                        instead of a return value because this is a multi-handler.
+         * @param oldParent The entity ID of the old parent. The entity ID is invalid if there was no old parent.
+         * @param newParent The entity ID of the new parent. The entity ID is invalid if there is no new parent.
+        */
+        virtual void CanParentChange(bool &parentCanChange, EntityId oldParent, EntityId newParent) { (void)parentCanChange; (void)oldParent; (void)newParent; }
 
         /**
          * Signals that the parent of the entity changed.
@@ -612,6 +622,14 @@ namespace AZ
          * @param newParent The entity ID of the new parent. The entity ID is invalid if there is no new parent.
          */
         virtual void OnParentChanged(EntityId oldParent, EntityId newParent)    { (void)oldParent; (void)newParent; }
+
+        /**
+         * Signals that the transform of the parent of the entity is about to change. Some components will need adjusting before this happens.
+         * To find if an entity ID is valid, use AZ::EntityId::IsValid().
+         * @param oldTransform The transform of the old parent. 
+         * @param newTransform The transform of the new parent. 
+         */
+        virtual void OnParentTransformWillChange(AZ::Transform oldTransform, AZ::Transform newTransform) { (void)oldTransform; (void)newTransform; }
 
         /**
          * Signals that a child was added to the entity.
@@ -800,6 +818,7 @@ namespace AZ
     typedef AZ::EBus<TransformHierarchyInformation> TransformHierarchyInformationBus;
 
     /// @endcond
+
 }
 
 /// @deprecated Use AZ::EditorTransformComponentTypeId.

@@ -137,6 +137,35 @@ bool AssetRequestHandler::InvokeHandler(AzFramework::AssetSystem::BaseAssetProce
         AssetProcessor::ConnectionBus::Event(key.first, &AssetProcessor::ConnectionBusTraits::SendResponse, key.second, response);
         return true;
     }
+    else if (message->GetMessageType() == AzToolsFramework::AssetSystem::SourceAssetProductsInfoRequest::MessageType())
+    {
+        AzToolsFramework::AssetSystem::SourceAssetProductsInfoRequest* request = 
+            azrtti_cast<AzToolsFramework::AssetSystem::SourceAssetProductsInfoRequest*>(message);
+
+        if (!request)
+        {
+            AZ_TracePrintf(AssetProcessor::DebugChannel, 
+                "Invalid Message Type: Message is not of type %d.  Incoming message type is %d.\n", 
+                AzToolsFramework::AssetSystem::SourceAssetProductsInfoRequest::MessageType(), message->GetMessageType());
+            return true;
+        }
+
+        AzToolsFramework::AssetSystem::SourceAssetProductsInfoResponse response;
+        if (request->m_assetId.IsValid())
+        {
+            AzToolsFramework::AssetSystemRequestBus::BroadcastResult(response.m_found, 
+                &AzToolsFramework::AssetSystem::AssetSystemRequest::GetAssetsProducedBySourceUUID, 
+                request->m_assetId.m_guid, response.m_productsAssetInfo);
+
+            AssetProcessor::ConnectionBus::Event(key.first, &AssetProcessor::ConnectionBusTraits::SendResponse, key.second, response);
+        }
+
+        // note that in the case of an invalid request, response is defaulted to false for m_found, so there is no need to
+        // populate the response in that case.
+
+        AssetProcessor::ConnectionBus::Event(key.first, &AssetProcessor::ConnectionBusTraits::SendResponse, key.second, response);
+        return true;
+    }
     else if (message->GetMessageType() == AzToolsFramework::AssetSystem::GetScanFoldersRequest::MessageType())
     {
         AzToolsFramework::AssetSystem::GetScanFoldersRequest* request = azrtti_cast<AzToolsFramework::AssetSystem::GetScanFoldersRequest*>(message);
@@ -210,6 +239,35 @@ bool AssetRequestHandler::InvokeHandler(AzFramework::AssetSystem::BaseAssetProce
 
         AzToolsFramework::ToolsAssetSystemBus::Broadcast(&AzToolsFramework::ToolsAssetSystemRequests::UnregisterSourceAssetType, request->m_assetType);
 
+        return true;
+    }
+    else if (message->GetMessageType() == AzFramework::AssetSystem::AssetInfoRequest::MessageType())
+    {
+        AssetInfoRequest* request = azrtti_cast<AssetInfoRequest*>(message);
+
+        if (!request)
+        {
+            AZ_TracePrintf(AssetProcessor::DebugChannel, "Invalid Message Type: Message is not of type %d.  Incoming message type is %d.\n", AzFramework::AssetSystem::AssetInfoRequest::MessageType(), message->GetMessageType());
+            return true;
+        }
+
+        AssetInfoResponse response;
+
+        if (request->m_assetId.IsValid())
+        {
+            AZ::Data::AssetInfo assetInfo;
+            AZ::Data::AssetCatalogRequestBus::BroadcastResult(assetInfo, &AZ::Data::AssetCatalogRequestBus::Events::GetAssetInfoById, request->m_assetId);
+            response.m_assetInfo = assetInfo;
+            response.m_found = !assetInfo.m_relativePath.empty() && assetInfo.m_assetType != AZ::Data::s_invalidAssetType && assetInfo.m_assetId.IsValid();
+        }
+        else if (!request->m_assetPath.empty())
+        {
+            bool autoRegisterIfNotFound = false;
+            AZ::Data::AssetCatalogRequestBus::BroadcastResult(response.m_assetInfo.m_assetId, &AZ::Data::AssetCatalogRequestBus::Events::GetAssetIdByPath, request->m_assetPath.c_str(), AZ::Data::s_invalidAssetType, autoRegisterIfNotFound);
+            response.m_found = response.m_assetInfo.m_assetId.IsValid();
+        }
+
+        AssetProcessor::ConnectionBus::Event(key.first, &AssetProcessor::ConnectionBusTraits::SendResponse, key.second, response);
         return true;
     }
     else

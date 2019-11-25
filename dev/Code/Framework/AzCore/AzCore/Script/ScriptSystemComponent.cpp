@@ -9,7 +9,6 @@
 * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 *
 */
-#ifndef AZ_UNITY_BUILD
 
 #if !defined(AZCORE_EXCLUDE_LUA)
 
@@ -263,6 +262,14 @@ void    ScriptSystemComponent::OnSystemTick()
             contextContainer.m_context->GetDebugContext()->ProcessDebugCommands();
         }
 
+#ifdef AZ_PROFILE_TELEMETRY
+        if (contextContainer.m_context->GetId() == ScriptContextIds::DefaultScriptContextId)
+        {
+            size_t memoryUsageBytes = contextContainer.m_context->GetMemoryUsage();
+            AZ_PROFILE_DATAPOINT(AZ::Debug::ProfileCategory::Script, memoryUsageBytes / 1024.0, "Script Memory (KB)");
+        }
+#endif // AZ_PROFILE_TELEMETRY
+
         contextContainer.m_context->GarbageCollectStep(contextContainer.m_garbageCollectorSteps);
     }
 }
@@ -359,9 +366,6 @@ bool ScriptSystemComponent::Load(const Data::Asset<ScriptAsset>& asset, ScriptCo
         AZStd::lock_guard<AZStd::recursive_mutex> lock(container->m_loadedScriptsMutex);
         container->m_loadedScripts.emplace(asset.GetId().m_guid, AZStd::move(info));
     }
-
-    // Connect to the asset bus so that we may know when this script reloads.
-    Data::AssetBus::MultiHandler::BusConnect(asset.GetId());
 
     return true;
 }
@@ -479,6 +483,9 @@ int ScriptSystemComponent::DefaultRequireHook(lua_State* lua, ScriptContext* con
     scriptIt->second.m_scriptNames.emplace(module);
     scriptIt->second.m_scriptAsset = script;
 
+    // Connect to the asset bus so that we may know when this script reloads.
+    Data::AssetBus::MultiHandler::BusConnect(script.GetId());
+
     return 1;
 }
 
@@ -579,7 +586,7 @@ bool ScriptSystemComponent::LoadAssetData(const Data::Asset<Data::AssetData>& as
         else
         {
             Data::AssetInfo scriptInfo;
-            EBUS_EVENT_RESULT(scriptInfo, Data::AssetCatalogRequestBus, GetAssetInfoById, asset.GetId());
+            AZ::Data::AssetCatalogRequestBus::BroadcastResult(scriptInfo, &AZ::Data::AssetCatalogRequestBus::Events::GetAssetInfoById, asset.GetId());
             script->m_debugName = "@" + scriptInfo.m_relativePath;
             AZStd::to_lower(script->m_debugName.begin(), script->m_debugName.end());
         }
@@ -592,9 +599,9 @@ bool ScriptSystemComponent::LoadAssetData(const Data::Asset<Data::AssetData>& as
         script->m_scriptBuffer.resize(scriptDataLength);
         stream->Read(scriptDataLength, script->m_scriptBuffer.data());
 
-        // Clear cached references in the event of a successful load
-        TickBus::QueueFunction(&ScriptSystemComponent::ClearAssetReferences, this, asset.GetId());
-
+        // Clear cached references in the event of a successful load. This function has to be queued on
+        // AssetBus where NotifyAssetReloaded is also queued, to ensure its execution before NotifyAssetReloaded
+        Data::AssetBus::QueueFunction(&ScriptSystemComponent::ClearAssetReferences, this, asset.GetId());
         return true;
     }
 
@@ -765,7 +772,7 @@ const char* ScriptSystemComponent::GetGroup() const
 
 const char* AZ::ScriptSystemComponent::GetBrowserIcon() const
 {
-    return "Editor/Icons/Components/LuaScript.png";
+    return "Editor/Icons/Components/LuaScript.svg";
 }
 
 AZ::Uuid AZ::ScriptSystemComponent::GetComponentTypeId() const
@@ -886,5 +893,3 @@ void ScriptSystemComponent::Reflect(ReflectContext* reflection)
 }
 
 #endif // #if !defined(AZCORE_EXCLUDE_LUA)
-
-#endif // #ifndef AZ_UNITY_BUILD

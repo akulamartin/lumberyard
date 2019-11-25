@@ -17,10 +17,11 @@
 #include <AzCore/std/string/string.h>
 
 #include <QIcon>
+#include <QImage>
 
 class QMimeData;
 class QWidget;
-
+class QImage;
 class QMenu;
 namespace AZ
 {
@@ -64,9 +65,23 @@ namespace AzToolsFramework
 
             //! Request File Browser model
             virtual AssetBrowserModel* GetAssetBrowserModel() = 0;
+
+            //! Returns true if entries were populated
+            virtual bool AreEntriesReady() = 0;
         };
 
         using AssetBrowserComponentRequestBus = AZ::EBus<AssetBrowserComponentRequests>;
+
+        //! Sends notifications from AssetBrowserComponent
+        class AssetBrowserComponentNotifications
+            : public AZ::EBusTraits
+        {
+        public:
+            //! Notifies when entries are physically populated in asset browser
+            virtual void OnAssetBrowserComponentReady() {}
+        };
+
+        using AssetBrowserComponentNotificationBus = AZ::EBus<AssetBrowserComponentNotifications>;
 
         //////////////////////////////////////////////////////////////////////////
         // Interaction
@@ -266,8 +281,11 @@ namespace AzToolsFramework
             * \param assetID The asset to select.
             */
             virtual void SelectProduct(AZ::Data::AssetId assetID) = 0;
+            virtual void ClearFilter() = 0;
         };
         using AssetBrowserViewRequestBus = AZ::EBus<AssetBrowserViewRequests>;
 
     } // namespace AssetBrowser
 } // namespace AzToolsFramework
+
+#include <AzToolsFramework/AssetBrowser/AssetBrowserBus.inl>

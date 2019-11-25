@@ -1,3 +1,14 @@
+/*
+* All or portions of this file Copyright (c) Amazon.com, Inc. or its affiliates, or 
+* a third party where indicated.
+*
+* For complete copyright and license terms please see the LICENSE at the root of this
+* distribution (the "License"). All use of this software is governed by the License,  
+* or, if provided, by the license below or the license accompanying this file. Do not
+* remove or modify any license notices. This file is distributed on an "AS IS" BASIS,
+* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  
+*
+*/
 
 #include "EmotionFX_precompiled.h"
 
@@ -40,7 +51,7 @@ namespace EMotionFX
                     editContext->Class<EditorAnimAudioComponent>("Audio Animation", "Adds ability to execute audio triggers when animation events occur.")
                         ->ClassElement(AZ::Edit::ClassElements::EditorData, "")
                         ->Attribute(AZ::Edit::Attributes::Category, "Audio")
-                        ->Attribute(AZ::Edit::Attributes::Icon, "Editor/Icons/Components/AudioTrigger.png")
+                        ->Attribute(AZ::Edit::Attributes::Icon, "Editor/Icons/Components/AudioAnimation.svg")
                         ->Attribute(AZ::Edit::Attributes::AppearsInAddComponentMenu, AZ_CRC("Game", 0x232b318c))
                         ->Attribute(AZ::Edit::Attributes::AutoExpand, true)
                         ->DataElement(AZ::Edit::UIHandlers::Default, &EditorAnimAudioComponent::m_editorTriggerEvents, "Trigger Map", "Maps the animation events to executable audio triggers.");

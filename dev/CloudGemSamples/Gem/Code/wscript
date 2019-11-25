@@ -24,7 +24,7 @@ def build(bld):
         platforms = ['all'],
         configurations  = ['all'],
         pch         = 'StdAfx.cpp',
-        use         = ['AzGameFramework', 'CloudGemFrameworkStaticLibrary'],
+        use         = ['AzGameFramework', 'CloudGemFramework.StaticLibrary'],
         is_game_gem     = True,
 
         #==============================
@@ -33,7 +33,8 @@ def build(bld):
         includes    = [ '.' ,
                         bld.Path('Code/CryEngine/CryCommon'),
                         bld.Path('Code/CryEngine/CryAction'),
-                        bld.Path('Code/CryEngine/CrySystem')],
+                        bld.Path('Code/CryEngine/CrySystem')
+                      ],
 
         #==============================
         # Windows
@@ -68,8 +69,5 @@ def build(bld):
         #==============================
         test_all_file_list = ['cloudgemsamples_tests.waf_files']
     )
-    
-    for p in bld.env['RESTRICTED_PLATFORMS']:
-        kw['{}_file_list'.format(p)] = ['Source/Core/{0}/game_{0}.waf_files'.format(p)]
 
     bld.DefineGem(**kw)

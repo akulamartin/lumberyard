@@ -20,7 +20,13 @@ namespace EMotionFX
     const int ObjectEditor::m_propertyLabelWidth = 160;
 
     ObjectEditor::ObjectEditor(AZ::SerializeContext* serializeContext, QWidget* parent)
+        : ObjectEditor(serializeContext, nullptr, parent)
+    {
+    }
+
+    ObjectEditor::ObjectEditor(AZ::SerializeContext* serializeContext, AzToolsFramework::IPropertyEditorNotify* notify, QWidget* parent)
         : QFrame(parent)
+        , m_object(nullptr)
         , m_propertyEditor(nullptr)
     {
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Maximum);
@@ -28,7 +34,7 @@ namespace EMotionFX
         m_propertyEditor = aznew AzToolsFramework::ReflectedPropertyEditor(this);
         m_propertyEditor->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Maximum);
         m_propertyEditor->setObjectName("PropertyEditor");
-        m_propertyEditor->Setup(serializeContext, nullptr, false/*enableScrollbars*/, m_propertyLabelWidth);
+        m_propertyEditor->Setup(serializeContext, notify, false/*enableScrollbars*/, m_propertyLabelWidth);
 
         QVBoxLayout* mainLayout = new QVBoxLayout(this);
         mainLayout->setSizeConstraint(QLayout::SetMinimumSize);
@@ -39,14 +45,10 @@ namespace EMotionFX
     }
 
 
-    ObjectEditor::~ObjectEditor()
+    void ObjectEditor::AddInstance(void* object, const AZ::TypeId& objectTypeId, void* aggregateInstance, void* compareInstance)
     {
-    }
-
-
-    void ObjectEditor::AddInstance(void* object, const AZ::TypeId& objectTypeId)
-    {
-        m_propertyEditor->AddInstance(object, objectTypeId);
+        m_object = object;
+        m_propertyEditor->AddInstance(object, objectTypeId, aggregateInstance, compareInstance);
         m_propertyEditor->InvalidateAll();
     }
 
@@ -58,7 +60,19 @@ namespace EMotionFX
         {
             m_propertyEditor->InvalidateAll();
         }
+        m_object = nullptr;
     }
-} // namespace EMotionFX
 
-#include <Source/Editor/ObjectEditor.moc>
+
+    void ObjectEditor::InvalidateAll()
+    {
+        m_propertyEditor->InvalidateAll();
+    }
+
+
+    void ObjectEditor::InvalidateValues()
+    {
+        m_propertyEditor->InvalidateValues();
+    }
+
+} // namespace EMotionFX

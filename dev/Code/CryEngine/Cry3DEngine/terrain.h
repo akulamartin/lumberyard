@@ -20,6 +20,7 @@
 
 #include <Terrain/Texture/MacroTexture.h>
 #include <Terrain/Texture/TexturePool.h>
+#include <Terrain/Bus/LegacyTerrainBus.h>
 #include <AzCore/std/function/function_fwd.h> // for callbacks
 #include "Environment/OceanEnvironmentBus.h"
 
@@ -168,6 +169,7 @@ struct SNameChunk
 class CTerrain
     : public ITerrain
     , public Cry3DEngineBase
+    , public LegacyTerrain::CryTerrainRequestBus::Handler
 {
     friend class CTerrainNode;
 public:
@@ -240,7 +242,7 @@ public:
     bool TryGetTextureStatistics(MacroTexture::TileStatistics& statistics) const;
     bool IsTextureStreamingInProgress() const;
     void CloseTerrainTextureFile();
-    void SetTerrainSectorTexture(int nTexSectorX, int nTexSectorY, unsigned int textureId, bool bMergeNotAllowed);
+    void SetTerrainSectorTexture(int nTexSectorX, int nTexSectorY, unsigned int textureId, unsigned int textureSizeX, unsigned int textureSizeY, bool bMergeNotAllowed);
 
     _smart_ptr<IRenderMesh> MakeAreaRenderMesh(const Vec3& vPos, float fRadius, _smart_ptr<IMaterial> pMat, const char* szLSourceName, Plane* planes);
     bool RenderArea(Vec3 vPos, float fRadius, _smart_ptr<IRenderMesh>& arrLightRenderMeshs, CRenderObject* pObj, _smart_ptr<IMaterial> pMaterial, const char* szComment, float* pCustomData, Plane* planes, const SRenderingPassInfo& passInfo);
@@ -322,6 +324,9 @@ public:
     static void LoadDataFromFile_FixAlignment(AZ::IO::HandleType& fileHandle, int& nDataSize);
     static void LoadDataFromFile_FixAlignment(uint8*& f, int& nDataSize);
     //
+
+    // LegacyTerrain::CryTerrainRequestBus
+    void RequestTerrainUpdate() override;
 
 private:
     template <class T>

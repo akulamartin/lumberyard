@@ -222,7 +222,6 @@ namespace UnitTest
         string str11(str2, 4, 3);
         AZ_TEST_VALIDATE_STRING(str11, 3);
 
-#if defined(AZ_HAS_RVALUE_REFS)
         string str12(sChar);
         string large = sCharLong;
 
@@ -267,7 +266,6 @@ namespace UnitTest
         AZ_TEST_VALIDATE_EMPTY_STRING(strSm);
         strLg.clear();
         AZ_TEST_VALIDATE_EMPTY_STRING(strLg);
-#endif // AZ_HAS_RVALUE_REFS
 
         str2.append(str3);
         AZ_TEST_VALIDATE_STRING(str2, 15);
@@ -1140,11 +1138,11 @@ namespace UnitTest
         AZ_TEST_ASSERT(cstr2 != "test");
         AZ_TEST_ASSERT(cstr2[2] == 's');
         AZ_TEST_ASSERT(cstr2.at(2) == 's');
-        AZ_TEST_START_ASSERTTEST;
+        AZ_TEST_START_TRACE_SUPPRESSION;
         AZ_TEST_ASSERT(cstr2.at(7) == 0);
-        AZ_TEST_STOP_ASSERTTEST(1);
+        AZ_TEST_STOP_TRACE_SUPPRESSION(1);
         AZ_TEST_ASSERT(!cstr2.empty());
-        AZ_TEST_ASSERT(cstr2.to_string() == string("Test"));
+        AZ_TEST_ASSERT(cstr2.data() == string("Test"));
         AZ_TEST_ASSERT((string)cstr2 == string("Test"));
 
         string_view cstr3 = cstr2;
@@ -1168,6 +1166,16 @@ namespace UnitTest
         AZStd::hash<string_view> h;
         AZStd::size_t value = h(cstr1);
         AZ_TEST_ASSERT(value != 0);
+
+        // testing empty string
+        AZStd::string emptyString;
+        string_view cstr4;
+        cstr4 = emptyString;
+        AZ_TEST_ASSERT(cstr4.data() != nullptr);
+        AZ_TEST_ASSERT(cstr4.size() == 0);
+        AZ_TEST_ASSERT(cstr4.length() == 0);
+        AZ_TEST_ASSERT(cstr4.begin() == cstr4.end());
+        AZ_TEST_ASSERT(cstr4.empty());
     }
 
     TEST_F(String, StringViewModifierTest)
@@ -1193,16 +1201,16 @@ namespace UnitTest
         EXPECT_EQ(view2.size() - 1, copyResult);
 
         char assertDest[destBufferSize] = { 0 };
-        AZ_TEST_START_ASSERTTEST;
+        AZ_TEST_START_TRACE_SUPPRESSION;
         view2.copy(assertDest, destBufferSize, view2.size() + 1);
-        AZ_TEST_STOP_ASSERTTEST(1);
+        AZ_TEST_STOP_TRACE_SUPPRESSION(1);
 
         // substr
         string_view subView2 = view2.substr(10);
         EXPECT_EQ("Haystack", subView2);
-        AZ_TEST_START_ASSERTTEST;
+        AZ_TEST_START_TRACE_SUPPRESSION;
         string_view assertSubView = view2.substr(view2.size() + 1);
-        AZ_TEST_STOP_ASSERTTEST(1);
+        AZ_TEST_STOP_TRACE_SUPPRESSION(1);
 
         // compare
         AZStd::size_t compareResult = view2.compare(1, view2.size() - 1, dest, copyResult);
@@ -1321,6 +1329,24 @@ namespace UnitTest
         string_view suffixRemovalView = view2;
         suffixRemovalView.remove_suffix(8);
         EXPECT_EQ("Needle in ", suffixRemovalView);
+
+        // starts_with
+        EXPECT_TRUE(view2.starts_with("Needle"));
+        EXPECT_TRUE(view2.starts_with('N'));
+        EXPECT_TRUE(view2.starts_with(AZStd::string_view("Needle")));
+
+        EXPECT_FALSE(view2.starts_with("Needle not"));
+        EXPECT_FALSE(view2.starts_with('n'));
+        EXPECT_FALSE(view2.starts_with(AZStd::string_view("Needle not")));
+
+        // ends_with
+        EXPECT_TRUE(view2.ends_with("Haystack"));
+        EXPECT_TRUE(view2.ends_with('k'));
+        EXPECT_TRUE(view2.ends_with(AZStd::string_view("Haystack")));
+
+        EXPECT_FALSE(view2.ends_with("Hayqueue"));
+        EXPECT_FALSE(view2.ends_with('e'));
+        EXPECT_FALSE(view2.ends_with(AZStd::string_view("Hayqueue")));
     }
 
     TEST_F(String, StringViewCmpOperatorTest)
@@ -1391,5 +1417,33 @@ namespace UnitTest
         EXPECT_GE(beaverView, bigBeaver);
         EXPECT_GE(compareStr, beaverView);
         EXPECT_GE(microBeaverStr, beaverView);
+    }
+
+    template<typename T>
+    const T* GetFormatString()
+    {
+        return "%s";
+    }
+
+    template <>
+    const wchar_t* GetFormatString<wchar_t>()
+    {
+        return L"%s";
+    }
+
+    template<typename T>
+    class StringFormatFixture
+        : public UnitTest::AllocatorsTestFixture
+    {
+    };
+
+    using StringFormatTypesToTest = ::testing::Types<AZStd::string>; //, AZStd::wstring>;
+    TYPED_TEST_CASE(StringFormatFixture, StringFormatTypesToTest);
+
+    TYPED_TEST(StringFormatFixture, CanFormatStringLongerThan2048Chars)
+    {
+        TypeParam str(4096, 'x');
+        TypeParam formatted = TypeParam::format(GetFormatString<typename TypeParam::value_type>(), str.c_str());
+        EXPECT_EQ(str, formatted);
     }
 }

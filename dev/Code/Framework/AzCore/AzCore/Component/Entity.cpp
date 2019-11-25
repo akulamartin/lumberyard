@@ -9,13 +9,13 @@
 * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 *
 */
-#ifndef AZ_UNITY_BUILD
 
 #include <AzCore/Component/Entity.h>
 #include <AzCore/Component/EntityBus.h>
 #include <AzCore/Component/EntityUtils.h>
 #include <AzCore/Component/ComponentApplicationBus.h>
 #include <AzCore/Component/TransformBus.h>
+#include <AzCore/Component/NamedEntityId.h>
 
 #include <AzCore/Casting/lossy_cast.h>
 
@@ -29,177 +29,14 @@
 #include <AzCore/std/chrono/chrono.h>
 #include <AzCore/std/parallel/thread.h>
 #include <AzCore/std/string/conversions.h>
-#include <AzCore/Platform/Platform.h>
+#include <AzCore/Platform.h>
 
 #include <AzCore/Debug/Profiler.h>
-
-
-#if defined(AZ_PLATFORM_WINDOWS)
-#   include <AzCore/IPC/SharedMemory.h>
-#   include <AzCore/PlatformIncl.h>
-#else
-#   include <AzCore/std/parallel/spin_mutex.h>
-#   include <AzCore/std/parallel/lock.h>
-#endif // AZ_PLATFORM_WINDOWS
 
 namespace AZ
 {
     //////////////////////////////////////////////////////////////////////////
     // Globals
-#if defined(AZ_PLATFORM_WINDOWS)
-    /**
-     * TODO: We can store the last ID generated on this computer into the registry
-     * (starting for the first time stamp), this way not waits, etc. will be needed.
-     * We are NOT doing this, because need of unique entity ID might be gone soon.
-     */
-    class TimeIntervalStamper
-    {
-    public:
-        TimeIntervalStamper(AZ::u64 timeInterval)
-            : m_time(nullptr)
-            , m_timeInterval(timeInterval)
-        {
-            AZ_Assert(m_timeInterval > 0, "You can't have 0 time interval!");
-            SharedMemory::CreateResult createResult = m_sharedData.Create("AZCoreIdStorage", sizeof(AZ::u64), true);
-            (void)createResult;
-            AZ_Assert(createResult != SharedMemory::CreateFailed, "Failed to create shared memory block for Id's!");
-            bool isReady = m_sharedData.Map();
-            (void)isReady;
-            AZ_Assert(isReady, "Failed to map the shared memory data!");
-            m_time = reinterpret_cast<AZ::u64*>(m_sharedData.Data());
-        }
-
-        ~TimeIntervalStamper()
-        {
-            // make sure we wait for time generated it time period, otherwise if
-            // we restart instantly we can generate the same ID.
-            AZ::u64 intervalUTC = AZStd::GetTimeUTCMilliSecond() / m_timeInterval;
-            lock();
-            AZ::u64 lastStamp = *m_time;
-            unlock();
-            if (intervalUTC < lastStamp)
-            {
-                // wait for the time
-                AZStd::this_thread::sleep_for(AZStd::chrono::milliseconds((lastStamp - intervalUTC) * m_timeInterval));
-            }
-        }
-
-        //////////////////////////////////////////////////////////////////////////
-        /// Naming is conforming with AZStd::lock_guard/unique_lock/etc.
-        void    lock()
-        {
-            m_sharedData.lock();
-            if (m_sharedData.IsLockAbandoned())
-            {
-                *m_time = 0; // reset the time
-            }
-        }
-        bool    try_lock()
-        {
-            bool isLocked = m_sharedData.try_lock();
-            if (isLocked && m_sharedData.IsLockAbandoned())
-            {
-                *m_time = 0; // reset the time
-            }
-            return m_sharedData.try_lock();
-        }
-        void    unlock()                    { m_sharedData.unlock(); }
-        //////////////////////////////////////////////////////////////////////////
-
-        AZ::u64  GetTimeStamp()
-        {
-            AZ::u64 utcTime = AZStd::GetTimeUTCMilliSecond();
-            AZ::u64 intervalUTC = utcTime / m_timeInterval;
-            if (intervalUTC <= *m_time) // if we generated more than one ID for the current time.
-            {
-                *m_time += 1; // get next interval
-            }
-            else
-            {
-                *m_time = intervalUTC;
-            }
-
-            return *m_time;
-        }
-    private:
-        SharedMemory        m_sharedData;
-        AZ::u64*            m_time;
-        AZ::u64             m_timeInterval; ///< Interval in milliseconds in which we store a time stamp
-    };
-#else // !AZ_PLATFORM_WINDOWS
-    static const char* kTimeVariableName = "TimeIntervalStamp";
-    static AZ::EnvironmentVariable<AZ::u64> g_sharedTimeStorage;
-    
-    class TimeIntervalStamper
-    {
-    public:
-        TimeIntervalStamper(AZ::u64 timeInterval)
-            : m_time(nullptr)
-            , m_timeInterval(timeInterval)
-        {
-            AZ_Assert(m_timeInterval > 0, "You can't have 0 time interval!");
-            
-            const bool isConstruct = true;
-            const bool isTransferOwnership = false;
-
-            g_sharedTimeStorage = Environment::CreateVariableEx<AZ::u64>(kTimeVariableName, isConstruct, isTransferOwnership);
-            m_time = &g_sharedTimeStorage.Get();
-
-            if (g_sharedTimeStorage.IsOwner())
-            {
-                *m_time = 0;
-            }
-
-        }
-
-        ~TimeIntervalStamper()
-        {
-            // make sure we wait for time generated it time period, otherwise if
-            // we restart instantly we can generate the same ID.
-            AZ::u64 intervalUTC = AZStd::GetTimeUTCMilliSecond() / m_timeInterval;
-            lock();
-            AZ::u64 lastStamp = *m_time;
-            unlock();
-            if (intervalUTC < lastStamp)
-            {
-                // wait for the time
-                AZStd::this_thread::sleep_for(AZStd::chrono::milliseconds((lastStamp - intervalUTC) * m_timeInterval));
-            }
-
-            g_sharedTimeStorage = nullptr;
-            m_time = nullptr;
-        }
-
-        //////////////////////////////////////////////////////////////////////////
-        /// Naming is conforming with AZStd::lock_guard/unique_lock/etc.
-        void    lock()                      { m_mutex.lock(); }
-        bool    try_lock()                  { return m_mutex.try_lock(); }
-        void    unlock()                    { m_mutex.unlock(); }
-        //////////////////////////////////////////////////////////////////////////
-
-        AZ::u64  GetTimeStamp()
-        {
-            AZ::u64 utcTime = AZStd::GetTimeUTCMilliSecond();
-            AZ::u64 intervalUTC = utcTime / m_timeInterval;
-            if (intervalUTC <= *m_time) // if we generated more than one ID for the current time.
-            {
-                *m_time += 1; // get next interval
-            }
-            else
-            {
-                *m_time = intervalUTC;
-            }
-
-            return *m_time;
-        }
-
-    private:
-        AZStd::spin_mutex       m_mutex;
-        AZ::u64*                m_time;
-        AZ::u64                 m_timeInterval; ///< Interval in milliseconds in which we store a time stamp
-    };
-#endif // !AZ_PLATFORM_WINDOWS
-
     class SerializeEntityFactory
         : public SerializeContext::IObjectFactory
     {
@@ -375,25 +212,10 @@ namespace AZ
 
         AZ_Assert(m_state == ES_INIT, "Entity should be in Init state to be Activated!");
 
-        const DependencySortResult dependencySortResult = EvaluateDependencies();
-        switch (dependencySortResult)
+        const DependencySortOutcome sortOutcome = EvaluateDependenciesGetDetails();
+        if (!sortOutcome.IsSuccess())
         {
-        case DependencySortResult::Success:
-            break;
-        case DependencySortResult::MissingRequiredService:
-            AZ_Error("Entity", false, "Entity '%s' [0x%llx] has missing required services and cannot be activated.\n", m_name.c_str(), m_id);
-            return;
-        case DependencySortResult::HasCyclicDependency:
-            AZ_Error("Entity", false, "Entity '%s' [0x%llx] cannot be activated due to a cyclic dependency between components.\n", m_name.c_str(), m_id);
-            return;
-        case DependencySortResult::HasIncompatibleServices:
-            AZ_Error("Entity", false, "Entity '%s' [0x%llx] cannot be activated due to incompatible components.\n", m_name.c_str(), m_id);
-            return;
-        case DependencySortResult::DescriptorNotRegistered:
-            AZ_Error("Entity", false, "Entity '%s' [0x%llx] cannot be activated because a component did not register its descriptor with the component application.\n", m_name.c_str(), m_id);
-            return;
-        default:
-            AZ_Error("Entity", false, "Entity '%s' [0x%llx] cannot be activated due to unexpected issues with its components.\n", m_name.c_str(), m_id);
+            AZ_Error("Entity", false, "Entity '%s' %s cannot be activated. %s", m_name.c_str(), m_id.ToString().c_str(), sortOutcome.GetError().m_message.c_str());
             return;
         }
 
@@ -444,15 +266,22 @@ namespace AZ
     //=========================================================================
     Entity::DependencySortResult Entity::EvaluateDependencies()
     {
-        DependencySortResult result = DependencySortResult::Success;
+        DependencySortOutcome outcome = EvaluateDependenciesGetDetails();
+        return outcome.IsSuccess() ? DependencySortResult::Success : outcome.GetError().m_code;
+    }
+
+    //=========================================================================
+    Entity::DependencySortOutcome Entity::EvaluateDependenciesGetDetails()
+    {
+        DependencySortOutcome outcome = AZ::Success();
 
         if (!m_isDependencyReady)
         {
-            result = DependencySort(m_components);
-            m_isDependencyReady = (result == DependencySortResult::Success);
+            outcome = DependencySort(m_components);
+            m_isDependencyReady = outcome.IsSuccess();
         }
 
-        return result;
+        return outcome;
     }
 
     //=========================================================================
@@ -553,7 +382,7 @@ namespace AZ
         {
             component->Init();
         }
-        
+
         InvalidateDependencies(); // We need to re-evaluate dependencies
         return true;
     }
@@ -1011,9 +840,13 @@ namespace AZ
                 ->Version(1, &EntityIdConverter)
                 ->Field("id", &EntityId::m_id);
 
+            NamedEntityId::Reflect(reflection);
+
             serializeContext->Class<ComponentConfig>()
                 ->Version(1)
             ;
+
+            EntityComponentIdPair::Reflect(reflection);
 
             EditContext* ec = serializeContext->GetEditContext();
             if (ec)
@@ -1150,10 +983,86 @@ namespace AZ
             candidates.pop_back();
             return candidateInfo;
         }
+
+        // Shortcut for returning a FailedSortDetails as an AZ::Failure.
+        static FailureValue<Entity::FailedSortDetails> FailureCode(Entity::DependencySortResult code, const char* formatMessage, ...)
+        {
+            va_list args;
+            va_start(args, formatMessage);
+
+            return Failure(Entity::FailedSortDetails{ code, AZStd::string::format_arg(formatMessage, args) });
+        }
+
+        // Function that creates a nice error message when incompatible components are found.
+        static AZStd::string CreateIncompatibilityMessage(ComponentServiceType service, const IncompatibleServiceInfo& incompatibleServiceInfo, const ProvidedServiceInfo& providedServiceInfo, const AZStd::vector<ComponentInfo>& componentInfos)
+        {
+            const ComponentInfo* componentProvidingService = providedServiceInfo.m_anyComponentProvidingService;
+            const ComponentInfo* componentIncompatibleWithService = incompatibleServiceInfo.m_anyComponentIncompatibleWithService;
+
+            // find two different components that we can report are incompatible with each other.
+            //
+            // we currently know one component which provides this service,
+            // and one component which is incompatible with this service,
+            // but these might be the same component.
+            if (componentProvidingService == componentIncompatibleWithService)
+            {
+                ComponentDescriptor::DependencyArrayType servicesTmp;
+
+                if (incompatibleServiceInfo.m_componentsIncompatibleWithServiceCount > 1)
+                {
+                    // multiple components are incompatible with this service,
+                    // find one that's different from the component providing this service.
+                    for (const ComponentInfo& componentInfo : componentInfos)
+                    {
+                        if (&componentInfo == componentProvidingService)
+                        {
+                            continue;
+                        }
+
+                        componentInfo.m_descriptor->GetIncompatibleServices(servicesTmp, componentInfo.m_component);
+                        if (AZStd::find(servicesTmp.begin(), servicesTmp.end(), service) != servicesTmp.end())
+                        {
+                            componentProvidingService = &componentInfo;
+                            break;
+                        }
+                    }
+                }
+                else
+                {
+                    // multiple components are providing this service,
+                    // find one that different from the component incompatible with this service.
+                    for (const ComponentInfo& componentInfo : componentInfos)
+                    {
+                        if (&componentInfo == componentIncompatibleWithService)
+                        {
+                            continue;
+                        }
+
+                        componentInfo.m_descriptor->GetProvidedServices(servicesTmp, componentInfo.m_component);
+                        if (AZStd::find(servicesTmp.begin(), servicesTmp.end(), service) != servicesTmp.end())
+                        {
+                            componentIncompatibleWithService = &componentInfo;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // different error message for multiple components of the same type
+            if (componentProvidingService->m_underlyingTypeId == componentIncompatibleWithService->m_underlyingTypeId)
+            {
+                return AZStd::string::format("Multiple '%s' found, but this component is incompatible with others of the same type.",
+                    componentProvidingService->m_component->RTTI_GetTypeName());
+            }
+
+            return AZStd::string::format("Components '%s' and '%s' are incompatible.",
+                componentIncompatibleWithService->m_component->RTTI_GetTypeName(),
+                componentProvidingService->m_component->RTTI_GetTypeName());
+        }
     }
 
     //=========================================================================
-    Entity::DependencySortResult Entity::DependencySort(ComponentArrayType& inOutComponents)
+    Entity::DependencySortOutcome Entity::DependencySort(ComponentArrayType& inOutComponents)
     {
         AZ_PROFILE_FUNCTION(AZ::Debug::ProfileCategory::AzCore);
 
@@ -1164,9 +1073,13 @@ namespace AZ
         using DependencySortInternal::DependentComponentEntry;
         using DependencySortInternal::PushCandidate;
         using DependencySortInternal::PopCandidate;
+        using DependencySortInternal::FailureCode;
+        using DependencySortInternal::CreateIncompatibilityMessage;
 
         // Conceptually, this is a topological sort where components
         // are the nodes and dependent services are the links between nodes.
+        //
+        // Be sure to benchmark before and after making changes to this algorithm (see BM_ComponentDependencySort)
 
         // Info about each component
         AZStd::vector<ComponentInfo> componentInfos;
@@ -1211,8 +1124,7 @@ namespace AZ
             ComponentDescriptorBus::EventResult(componentDescriptor, azrtti_typeid(component), &ComponentDescriptorBus::Events::GetDescriptor);
             if (!componentDescriptor)
             {
-                AZ_Assert(false, "Component class %s descriptor is not created! It must be before you can use it!", component->RTTI_GetTypeName());
-                return DependencySortResult::DescriptorNotRegistered;
+                return FailureCode(DependencySortResult::MissingDescriptor, "No descriptor found for Component class '%s'.", component->RTTI_GetTypeName());
             }
 
             componentInfos.push_back();
@@ -1269,15 +1181,15 @@ namespace AZ
                 // but it's an error if more than one component is involved in the service overlap
                 const IncompatibleServiceInfo& incompatibleInfo = incompatible.second;
                 const ProvidedServiceInfo& providedInfo = foundProvidedService->second;
+
                 if (incompatibleInfo.m_componentsIncompatibleWithServiceCount > 1
                     || providedInfo.m_componentsProvidingServiceCount > 1
                     || incompatibleInfo.m_anyComponentIncompatibleWithService != providedInfo.m_anyComponentProvidingService)
                 {
-                    AZ_Assert(false,
-                        "Component class %s has incompatible services with another component on the entity. Please remove one of the components that provides service [0x%x]",
-                        incompatibleInfo.m_anyComponentIncompatibleWithService->m_descriptor->GetName(),
-                        incompatible.first);
-                    return DependencySortResult::HasIncompatibleServices;
+                    // We know there's an incompatibility, but we don't have enough data to give a super useful error message.
+                    // Tracking more data slows down this algorithm in the common case, when nothing is going wrong.
+                    // CreateIncompatibilityMessage() gathers more data so we can provide a better message in the uncommon case that things go wrong.
+                    return FailureCode(DependencySortResult::HasIncompatibleServices, CreateIncompatibilityMessage(incompatible.first, incompatibleInfo, providedInfo, componentInfos).c_str());
                 }
             }
         }
@@ -1309,10 +1221,8 @@ namespace AZ
                     {
                         if (processingRequiredServices)
                         {
-                            AZ_Assert(false,
-                                "Entity has missing required services. Please add a component to the entity which provides service [0x%x]",
-                                service);
-                            return DependencySortResult::MissingRequiredService;
+                            return FailureCode(DependencySortResult::MissingRequiredService, "Component '%s' is missing another required component.",
+                                componentInfo.m_component->RTTI_GetTypeName());
                         }
                         else
                         {
@@ -1383,12 +1293,38 @@ namespace AZ
         // if we failed to sort every component, there must be a cyclic dependency
         if (sortedComponents.size() != componentInfos.size())
         {
-            return DependencySortResult::HasCyclicDependency;
+            // Format message like: "Cycle exists amongst: ComponentA, ComponentB, ComponentC, ..."
+            AZStd::string message = "Infinite loop of service dependencies amongst components: ";
+            size_t foundUnsorted = 0;
+            for (ComponentInfo& componentInfo : componentInfos)
+            {
+                if (AZStd::find(sortedComponents.begin(), sortedComponents.end(), componentInfo.m_component) == sortedComponents.end())
+                {
+                    if (foundUnsorted > 0)
+                    {
+                        message += ", ";
+                    }
+
+                    if (foundUnsorted == 3)
+                    {
+                        message += "...";
+                        break;
+                    }
+                    else
+                    {
+                        message += componentInfo.m_component->RTTI_GetTypeName();
+                    }
+
+                    foundUnsorted++;
+                }
+            }
+
+            return FailureCode(DependencySortResult::HasCyclicDependency, message.c_str());
         }
 
         // success!
         inOutComponents = sortedComponents;
-        return DependencySortResult::Success;
+        return Success();
     }
 
     //32 bit crc of machine ID, process ID, and process start time
@@ -1436,5 +1372,3 @@ namespace AZ
         return eid;
     }
 } // namespace AZ
-
-#endif // #ifndef AZ_UNITY_BUILD

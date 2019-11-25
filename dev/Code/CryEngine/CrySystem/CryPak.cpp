@@ -37,6 +37,7 @@
 #include <AzCore/base.h>
 #include <AzCore/IO/SystemFile.h>
 #include <AzCore/IO/FileIO.h>
+#include <AzCore/NativeUI/NativeUIRequests.h>
 #include <AzCore/std/functional.h>
 #include <AzCore/std/string/conversions.h>
 #include <AzCore/Casting/numeric_cast.h>
@@ -54,9 +55,12 @@
 
 #include <IDiskProfiler.h>
 
-#if defined(AZ_PLATFORM_APPLE)
+#if AZ_TRAIT_OS_PLATFORM_APPLE
 #include "SystemUtilsApple.h"
 #endif
+
+#include <AzCore/std/string/conversions.h>
+#include <AzCore/std/algorithm.h>
 
 typedef CryStackStringT<char, 1024> TPathStackString;
 /////////////////////////////////////////////////////
@@ -123,14 +127,22 @@ inline bool IsModPath(const char* originalPath)
 }
 #endif
 
-namespace
+namespace CryPakInternal
 {
-    // Utility function to de-alias pak file opening and file-within-pak opening
-    // if the file specified was an absolute path but it points at one of the aliases, de-alias it and replace it with that alias.
-    // this works around problems where the level editor is in control but still mounts asset packs (ie, level.pak mounted as @assets@)
-    // it is assumed that the path is already converted to forward slashes, lowcased, and normalized
-    string ConvertAbsolutePathToAliasedPath(const char* sourcePath, const char* aliasToLookFor = "@devassets@", const char* aliasToReplaceWith = "@assets@")
+    // Explanation of this function:  it is like a 'find and  replace' for paths
+    // if the source path starts with 'aliasToLookFor' it will replace it with 'aliasToReplaceWith'
+    // else it will leave it untouched.
+    // the only caveat here is that it will perform this replacement if the source path either begins
+    // with the literal alias to look for, or begins with the actual absolute path that the alias to
+    // look for represents.  It is a way of redirecting all @devassets@ to @assets@ regardless of whether
+    // you input a string that literally starts with @devassets@ or one that starts with the absolute path to the
+    // folder that @devassets@ aliases.
+    AZ::Outcome<string, AZStd::string> ConvertAbsolutePathToAliasedPath(const char* sourcePath, const char* aliasToLookFor, const char* aliasToReplaceWith)
     {
+        if (sourcePath != nullptr && strlen(sourcePath) >= AZ_MAX_PATH_LEN)
+        {
+            return AZ::Failure<AZStd::string>("Cannot convert path to aliased path, sourcePath is longer than AZ_MAX_PATH_LEN");
+        }
         if ((aliasToLookFor) && (aliasToReplaceWith) && (sourcePath) && (AZ::IO::FileIOBase::GetDirectInstance()))
         {
             char unaliasedPath[AZ_MAX_PATH_LEN + PathUtil::maxAliasLength] = { 0 };
@@ -145,11 +157,18 @@ namespace
 
                     if (strlen(sourcePath) == strlen(alias))
                     {
-                        return unaliasedPath;
+                        return AZ::Success<string>(unaliasedPath);
                     }
-
-                    azstrcat(unaliasedPath, AZ_MAX_PATH_LEN + PathUtil::maxAliasLength, sourcePath + (strlen(alias) + strlen(CRY_NATIVE_PATH_SEPSTR)));
-                    return unaliasedPath;
+                    // do we have to add a path seperator?
+                    size_t startingOffset = strlen(alias);
+                    char probedSeparator = sourcePath[startingOffset];
+                    if ((probedSeparator == DOS_PATH_SEP_CHR)||(probedSeparator == UNIX_PATH_SEP_CHR))
+                    {
+                        ++startingOffset;
+                    }
+                    
+                    azstrcat(unaliasedPath, AZ_MAX_PATH_LEN + PathUtil::maxAliasLength, sourcePath + startingOffset);
+                    return AZ::Success<string>(unaliasedPath);
                 }
             }
             else if (azstrnicmp(sourcePath, aliasToLookFor, strlen(aliasToLookFor)) == 0)  // we also check to see if it starts with the alias instead of its absolute path
@@ -159,14 +178,22 @@ namespace
 
                 if (strlen(sourcePath) == strlen(aliasToLookFor))
                 {
-                    return unaliasedPath;
+                    return AZ::Success<string>(unaliasedPath);
                 }
 
-                azstrcat(unaliasedPath, AZ_MAX_PATH_LEN + PathUtil::maxAliasLength, sourcePath + (strlen(aliasToLookFor) + strlen(CRY_NATIVE_PATH_SEPSTR)));
-                return unaliasedPath;
+                // do we have to add a path seperator?
+                size_t startingOffset = strlen(aliasToLookFor);
+                char probedSeparator = sourcePath[startingOffset];
+                if ((probedSeparator == DOS_PATH_SEP_CHR)||(probedSeparator == UNIX_PATH_SEP_CHR))
+                {
+                    ++startingOffset;
+                }
+
+                azstrcat(unaliasedPath, AZ_MAX_PATH_LEN + PathUtil::maxAliasLength, sourcePath + startingOffset);
+                return AZ::Success<string>(unaliasedPath);
             }
         }
-        return sourcePath;
+        return AZ::Success<string>(sourcePath);
     }
 }
 
@@ -180,11 +207,11 @@ public:
     CResourceList() { m_iter = m_set.end(); };
     ~CResourceList() {};
 
-    static stack_string UnifyFilename(const char* sResourceFile)
+    static AZ::Outcome<stack_string, AZStd::string> UnifyFilename(const char* sResourceFile)
     {
         if (!sResourceFile)
         {
-            return ".";
+            return AZ::Success<stack_string>(".");
         }
         stack_string filename = sResourceFile;
         // Ideally the convert to alias call would be unnecessary - if we use aliases in all cases coming into our file open operations.
@@ -192,20 +219,29 @@ public:
         AZ::IO::FileIOBase::GetInstance()->ConvertToAlias(filename.m_strBuf, filename.capacity());
         
         // And convert from @devassets@ to @assets@
-        filename = ConvertAbsolutePathToAliasedPath(filename.c_str());
+        AZ::Outcome<string, AZStd::string> pathConversionResult = CryPakInternal::ConvertAbsolutePathToAliasedPath(filename.c_str());
+        if (!pathConversionResult.IsSuccess())
+        {
+            return AZ::Failure(pathConversionResult.GetError());
+        }
+        filename = pathConversionResult.GetValue();
         filename.replace('\\', '/');
-#if !defined(AZ_PLATFORM_APPLE)
+#if !AZ_TRAIT_OS_PLATFORM_APPLE
         filename.MakeLower();
 #endif
-        return filename;
+        return AZ::Success(filename);
     }
 
     virtual void Add(const char* sResourceFile)
     {
-        stack_string filename = UnifyFilename(sResourceFile);
-
+        AZ::Outcome<stack_string,AZStd::string> filename = UnifyFilename(sResourceFile);
+        if (!filename.IsSuccess())
+        {
+            AZ_Error("CryPak", false, filename.GetError().c_str());
+            return;
+        }
         CryAutoLock<CryCriticalSection> lock(m_lock);
-        m_set.insert(filename);
+        m_set.insert(filename.GetValue());
     }
     virtual void Clear()
     {
@@ -215,10 +251,16 @@ public:
     }
     virtual bool IsExist(const char* sResourceFile)
     {
-        stack_string filename = UnifyFilename(sResourceFile);
+        AZ::Outcome<stack_string, AZStd::string> filename = UnifyFilename(sResourceFile);
+
+        if (!filename.IsSuccess())
+        {
+            AZ_Error("CryPak", false, filename.GetError().c_str());
+            return false;
+        }
 
         CryAutoLock<CryCriticalSection> lock(m_lock);
-        if (m_set.find(CONST_TEMP_STRING(filename.c_str())) != m_set.end())
+        if (m_set.find(CONST_TEMP_STRING(filename.GetValue().c_str())) != m_set.end())
         {
             return true;
         }
@@ -453,12 +495,9 @@ static void fileAccessMessage(int threadIndex, const char* inName)
 
         CryLog("%s", msg.c_str());
 
-        IPlatformOS::EMsgBoxResult result;
-
-        IPlatformOS* pOS = gEnv->pSystem->GetPlatformOS();
-        result = pOS->DebugMessageBox(msg.c_str(), "TRC/TCR Fail: Syncronous File Access");
-
-        if (result == IPlatformOS::eMsgBox_Cancel)
+        AZStd::string result;
+        EBUS_EVENT_RESULT(result, AZ::NativeUI::NativeUIRequestBus, DisplayOkDialog, "TRC/TCR Fail: Syncronous File Access", msg.c_str(), false);
+        if (result == "Cancel")
         {
             DebugBreak();
         }
@@ -684,7 +723,7 @@ void CCryPak::AddMod(const char* szMod)
     CryPathString strPrepend = szMod;
     strPrepend.replace(g_cNativeSlash, g_cNonNativeSlash);
 
-#if !defined(AZ_PLATFORM_APPLE)
+#if !AZ_TRAIT_OS_PLATFORM_APPLE
     // Don't force paths to lower on Apple platforms that are case-sensitive
     strPrepend.MakeLower();
 #endif
@@ -706,7 +745,7 @@ void CCryPak::RemoveMod(const char* szMod)
 {
     CryPathString strPrepend = szMod;
     strPrepend.replace(g_cNativeSlash, g_cNonNativeSlash);
-#if !defined(AZ_PLATFORM_APPLE)
+#if !AZ_TRAIT_OS_PLATFORM_APPLE
     strPrepend.MakeLower();
 #endif
 
@@ -836,6 +875,14 @@ const char* CCryPak::GetDirectoryDelimiter() const
 //////////////////////////////////////////////////////////////////////////
 void CCryPak::SetLocalizationFolder(char const* const sLocalizationFolder)
 {
+    if (m_sLocalizationFolder.empty())
+    {
+        m_sLocalizationRoot = sLocalizationFolder;
+        m_sLocalizationRoot += CRY_NATIVE_PATH_SEPSTR;
+        m_sLocalizationFolder = m_sLocalizationRoot;
+        return;
+    }
+
     // Get the localization folder
     m_sLocalizationFolder = sLocalizationFolder;
     m_sLocalizationFolder += CRY_NATIVE_PATH_SEPSTR;
@@ -867,11 +914,12 @@ CCryPak::~CCryPak()
         AUTO_MODIFYLOCK(m_csOpenFiles);
         for (ZipPseudoFileArray::iterator itFile = m_arrOpenFiles.begin(); itFile != m_arrOpenFiles.end(); ++itFile)
         {
-            if (itFile->GetFile())
+            if ((*itFile)->GetFile())
             {
-                itFile->Destruct();
+                (*itFile)->Destruct();
                 ++numFilesForcedToClose;
             }
+            delete *itFile;
         }
     }
 
@@ -919,7 +967,11 @@ CCryPak::~CCryPak()
         }
     }
 
-    SAFE_DELETE(m_pWidget);
+    if (gEnv && gEnv->pSystem && gEnv->pSystem->GetPerfHUD() && m_pWidget)
+    {
+        gEnv->pSystem->GetPerfHUD()->RemoveWidget(m_pWidget);
+        m_pWidget = nullptr;
+    }
 
     CRY_ASSERT_MESSAGE(m_cachedFileRawDataSet.empty(), "All PakFile cached raw data instances not closed");
 }
@@ -943,23 +995,41 @@ char* CCryPak::BeautifyPath(char* path, bool bMakeLowercase)
         return path;
     }
     
-    size_t endOfAlias = 0;
 
-    // Finding end of the alias if one is present
-    if (*path == '@')
+    if (bMakeLowercase)
     {
-        endOfAlias = AzFramework::StringFunc::Find(path, '@', 1);
-    }
+        // Finding end of the alias if one is present
+        size_t endOfAlias = AZStd::string::npos;
+        if (*path == '@')
+        {
+            endOfAlias = AzFramework::StringFunc::Find(path, '@', 1);
+        }
 
-    // Cry code expects most paths to be lowercased by this function
-    if (bMakeLowercase && endOfAlias != AZStd::string::npos && AzFramework::StringFunc::Path::IsRelative(path))
-    {
-        AZStd::to_lower(path + endOfAlias + 1, path + len);
+        // If the alias was not found then lowercase the entire path
+        // otherwise lowercase all elements after the final alias @
+        size_t lowercasePos = (endOfAlias == AZStd::string::npos) ? 0 : endOfAlias + 1;
+
+        // Cry code expects most paths to be lowercased by this function
+        AZStd::to_lower(path + lowercasePos, path + len);
     }
 
     AZStd::replace(path, path + len, g_cNonNativeSlash, g_cNativeSlash);
 
-    return path + len;
+    AZStd::string_view pathView(path, path + len);
+    char doubleNativeString[3] = { g_cNativeSlash, g_cNativeSlash, '\0' };
+    AZStd::string_view doubleNativeStringView(doubleNativeString, AZ_ARRAY_SIZE(doubleNativeString) - 1);
+    size_t pos = 0U;
+    while ((pos = pathView.find(doubleNativeString, pos)) != AZStd::string_view::npos)
+    {
+        // Make a sub view from the first non-slash character until the end of the path
+        size_t firstNotSlashIndex = pathView.find_first_not_of(g_cNativeSlash, pos + 2);
+        AZStd::string_view postNativeSlashView = pathView.substr(firstNotSlashIndex);
+        // Skip past the first native slash
+        memmove(path + pos + 1, postNativeSlashView.data(), postNativeSlashView.size());
+        pathView = AZStd::string_view(path, pos + 1 + postNativeSlashView.size());
+    }
+    *(path + pathView.size()) = '\0';
+    return path + pathView.size();
 }
 
 // remove all '%s/..' or '.' parts from the path (needs beautified path - only single native slashes)
@@ -1212,7 +1282,7 @@ const char* CCryPak::AdjustFileNameInternal(const char* src, char* dst, size_t d
 
     char* pEnd = dst + dstLen;
 
-#if defined(LINUX) || defined(AZ_PLATFORM_APPLE)
+#if defined(LINUX) || AZ_TRAIT_OS_PLATFORM_APPLE
     if ((nFlags & FLAGS_ADD_TRAILING_SLASH) && pEnd > dst && (pEnd[-1] != g_cNativeSlash && pEnd[-1] != g_cNonNativeSlash))
 #else
     // p now points to the end of string
@@ -1343,18 +1413,7 @@ bool CCryPak::IsFolder(const char* sPath)
         return false;
     }
 
-    char resolvedPath[AZ_MAX_PATH_LEN] = { 0 };
-    AZ::IO::FileIOBase::GetDirectInstance()->ResolvePath(szFullPathBuf, resolvedPath, AZ_MAX_PATH_LEN);
-
-    DWORD attrs = CryGetFileAttributes(resolvedPath);
-
-    if (attrs == INVALID_FILE_ATTRIBUTES)
-    {
-        // non-existent things are not directories.
-        return false;
-    }
-
-    if ((attrs & FILE_ATTRIBUTE_DIRECTORY) == FILE_ATTRIBUTE_DIRECTORY)
+    if (AZ::IO::FileIOBase::GetDirectInstance()->IsDirectory(szFullPathBuf))
     {
         return true;
     }
@@ -1408,7 +1467,7 @@ bool CCryPak::IsFileCompressed(const char* filename)
 AZ::IO::HandleType CCryPak::FOpen(const char* pName, const char* szMode, char* szFileGamePath, int nLen)
 {
     LOADING_TIME_PROFILE_SECTION;
-
+    
     SAutoCollectFileAcessTime accessTime(this);
 
     PROFILE_DISK_OPEN;
@@ -1420,6 +1479,7 @@ AZ::IO::HandleType CCryPak::FOpen(const char* pName, const char* szMode, char* s
         nLen = g_nMaxPath;
     }
     azstrncpy(szFileGamePath, nLen, szFullPath, nLen);
+    AZ_PROFILE_SCOPE_DYNAMIC(AZ::Debug::ProfileCategory::Game, "File: %s Pak: %p", szFileGamePath, this);
     AZ::IO::HandleType fileHandle;
     AZ::IO::FileIOBase::GetDirectInstance()->Open(szFullPath, AZ::IO::GetOpenModeFromStringMode(szMode), fileHandle);
 
@@ -1448,6 +1508,7 @@ AZ::IO::HandleType CCryPak::FOpen(const char* pName, const char* szMode, unsigne
     }
 
     PROFILE_DISK_OPEN;
+    AZ_PROFILE_SCOPE_DYNAMIC(AZ::Debug::ProfileCategory::Game, "File: %s Pak: %p", pName, this);
     SAutoCollectFileAcessTime accessTime(this);
 
     AZ::IO::HandleType fileHandle = AZ::IO::InvalidHandle;
@@ -1551,7 +1612,7 @@ AZ::IO::HandleType CCryPak::FOpen(const char* pName, const char* szMode, unsigne
     }
 
     const char* szFullPath = AdjustFileName(pName, szFullPathBuf, AZ_ARRAY_SIZE(szFullPathBuf), nAdjustFlags);
-
+    AZ_PROFILE_SCOPE_DYNAMIC(AZ::Debug::ProfileCategory::Game, "File: %s Pak: %p", szFullPath, this);
     if (nOSFlags & (_O_WRONLY | _O_RDWR))
     {
         CheckFileAccessDisabled(szFullPath, szMode);
@@ -1675,21 +1736,21 @@ AZ::IO::HandleType CCryPak::FOpen(const char* pName, const char* szMode, unsigne
     size_t nFile;
     // find the empty slot and open the file there; return the handle
     {
-        for (nFile = 0; nFile < m_arrOpenFiles.size() && m_arrOpenFiles[nFile].GetFile(); ++nFile)
+        for (nFile = 0; nFile < m_arrOpenFiles.size() && m_arrOpenFiles[nFile]->GetFile(); ++nFile)
         {
             continue;
         }
         if (nFile == m_arrOpenFiles.size())
         {            
-            m_arrOpenFiles.resize(nFile + 1);
+            m_arrOpenFiles.push_back(new CZipPseudoFile());
         }
         if (pFileData != NULL && (nInputFlags & FOPEN_HINT_DIRECT_OPERATION) && !pFileData->m_pZip->IsInMemory())
         {
             nOSFlags |= CZipPseudoFile::_O_DIRECT_OPERATION;
         }
-        CZipPseudoFile& rZipFile = m_arrOpenFiles[nFile];
+        CZipPseudoFile* rZipFile = m_arrOpenFiles[nFile];
         nOSFlags |= (archiveFlags & FLAGS_REDIRECT_TO_DISC);
-        rZipFile.Construct(pFileData, nOSFlags);
+        rZipFile->Construct(pFileData, nOSFlags);
     }
 
     AZ::IO::HandleType ret = (AZ::IO::HandleType)(nFile + g_nPseudoFileIdxOffset);
@@ -1727,13 +1788,12 @@ CCachedFileDataPtr CCryPak::GetFileData(const char* szName, unsigned int& nArchi
 //////////////////////////////////////////////////////////////////////////
 CCachedFileDataPtr CCryPak::GetOpenedFileDataInZip(AZ::IO::HandleType fileHandle)
 {
-    AUTO_READLOCK(m_csOpenFiles);
-
-    INT_PTR nPseudoFile = ((INT_PTR)fileHandle) - g_nPseudoFileIdxOffset;
-    if ((UINT_PTR)nPseudoFile < m_arrOpenFiles.size())
+    CZipPseudoFile* pseudoFile = GetPseudoFile(fileHandle);
+    if (pseudoFile)
     {
-        return m_arrOpenFiles[nPseudoFile].GetFile();
+        return pseudoFile->GetFile();
     }
+
     return 0;
 }
 
@@ -1762,9 +1822,15 @@ ZipDir::FileEntry* CCryPak::FindPakFileEntry(const char* szPath, unsigned int& n
     LOADING_TIME_PROFILE_SECTION;
 
 
-    string unaliasedPath = ConvertAbsolutePathToAliasedPath(szPath);
+    AZ::Outcome<string, AZStd::string> unaliasedPath = CryPakInternal::ConvertAbsolutePathToAliasedPath(szPath);
 
-    unsigned nNameLen = static_cast<unsigned>(unaliasedPath.size());
+    if (!unaliasedPath.IsSuccess())
+    {
+        AZ_Error("CryPak", false, unaliasedPath.GetError().c_str());
+        return nullptr;
+    }
+
+    unsigned nNameLen = static_cast<unsigned>(unaliasedPath.GetValue().size());
     AUTO_READLOCK(m_csZips);
     // scan through registered pak files and try to find this file
     for (ZipArray::reverse_iterator itZip = m_arrZips.rbegin(); itZip != m_arrZips.rend(); ++itZip)
@@ -1784,11 +1850,11 @@ ZipDir::FileEntry* CCryPak::FindPakFileEntry(const char* szPath, unsigned int& n
         size_t nRootCompLength = itZip->strBindRoot.length();
         const char* const cpRoot = itZip->strBindRoot.c_str();
 
-        if (nNameLen > nRootCompLength  && !memcmp(cpRoot, unaliasedPath.c_str(), nRootCompLength))
+        if (nNameLen > nRootCompLength  && !memcmp(cpRoot, unaliasedPath.GetValue().c_str(), nRootCompLength))
         {
             nBindRootLen = nRootCompLength;
 
-            ZipDir::FileEntry* pFileEntry = itZip->pZip->FindFile(unaliasedPath.c_str() + nBindRootLen);
+            ZipDir::FileEntry* pFileEntry = itZip->pZip->FindFile(unaliasedPath.GetValue().c_str() + nBindRootLen);
             if (pFileEntry)
             {
                 if (pZip)
@@ -1796,8 +1862,6 @@ ZipDir::FileEntry* CCryPak::FindPakFileEntry(const char* szPath, unsigned int& n
                     *pZip = itZip->pZip;
                 }
 
-                //if (pZip)
-                //CryLog( "Zip [%s] %s",itZip->pZip->GetFilePath(),unaliasedPath.c_str() );
                 nArchiveFlags = itZip->pArchive->GetFlags();
                 return pFileEntry;
             }
@@ -1809,11 +1873,10 @@ ZipDir::FileEntry* CCryPak::FindPakFileEntry(const char* szPath, unsigned int& n
 
 long CCryPak::FTell(AZ::IO::HandleType fileHandle)
 {
-    AUTO_READLOCK(m_csOpenFiles);
-    INT_PTR nPseudoFile = ((INT_PTR)fileHandle) - g_nPseudoFileIdxOffset;
-    if ((UINT_PTR)nPseudoFile < m_arrOpenFiles.size())
+    CZipPseudoFile* pseudoFile = GetPseudoFile(fileHandle);
+    if (pseudoFile)
     {
-        return m_arrOpenFiles[nPseudoFile].FTell();
+        return pseudoFile->FTell();
     }
     else
     {
@@ -1826,11 +1889,10 @@ long CCryPak::FTell(AZ::IO::HandleType fileHandle)
 // returns the path to the archive in which the file was opened
 const char* CCryPak::GetFileArchivePath(AZ::IO::HandleType fileHandle)
 {
-    AUTO_READLOCK(m_csOpenFiles);
-    INT_PTR nPseudoFile = ((INT_PTR)fileHandle) - g_nPseudoFileIdxOffset;
-    if ((UINT_PTR)nPseudoFile < m_arrOpenFiles.size())
+    CZipPseudoFile* pseudoFile = GetPseudoFile(fileHandle);
+    if(pseudoFile)
     {
-        return m_arrOpenFiles[nPseudoFile].GetArchivePath();
+        return pseudoFile->GetArchivePath();
     }
     else
     {
@@ -1845,13 +1907,10 @@ const char* CCryPak::GetFileArchivePath(AZ::IO::HandleType fileHandle)
 // returns the file modification time
 uint64 CCryPak::GetModificationTime(AZ::IO::HandleType fileHandle)
 {
-    INT_PTR nPseudoFile = ((INT_PTR)fileHandle) - g_nPseudoFileIdxOffset;
+    CZipPseudoFile* pseudoFile = GetPseudoFile(fileHandle);
+    if (pseudoFile)
     {
-        AUTO_READLOCK(m_csOpenFiles);
-        if ((UINT_PTR)nPseudoFile < m_arrOpenFiles.size())
-        {
-            return m_arrOpenFiles[nPseudoFile].GetModificationTime();
-        }
+        return pseudoFile->GetModificationTime();
     }
 
     return AZ::IO::FileIOBase::GetDirectInstance()->ModificationTime(fileHandle);
@@ -1859,13 +1918,10 @@ uint64 CCryPak::GetModificationTime(AZ::IO::HandleType fileHandle)
 
 size_t CCryPak::FGetSize(AZ::IO::HandleType fileHandle)
 {
-    INT_PTR nPseudoFile = ((INT_PTR)fileHandle) - g_nPseudoFileIdxOffset;
+    CZipPseudoFile* pseudoFile = GetPseudoFile(fileHandle);
+    if (pseudoFile)
     {
-        AUTO_READLOCK(m_csOpenFiles);
-        if ((UINT_PTR)nPseudoFile < m_arrOpenFiles.size())
-        {
-            return m_arrOpenFiles[nPseudoFile].GetFileSize();
-        }
+        return pseudoFile->GetFileSize();
     }
 
     AZ::u64 fileSize = 0;
@@ -1917,14 +1973,13 @@ size_t CCryPak::FGetSize(const char* sFilename, bool bAllowUseFileSystem)
 int CCryPak::FFlush(AZ::IO::HandleType fileHandle)
 {
     SAutoCollectFileAcessTime accessTime(this);
-    INT_PTR nPseudoFile = ((INT_PTR)fileHandle) - g_nPseudoFileIdxOffset;
+
+    CZipPseudoFile* pseudoFile = GetPseudoFile(fileHandle);
+    if (pseudoFile)
     {
-        AUTO_READLOCK(m_csOpenFiles);
-        if ((UINT_PTR)nPseudoFile < m_arrOpenFiles.size())
-        {
-            return 0;
-        }
+        return 0;
     }
+
 
     if (AZ::IO::FileIOBase::GetDirectInstance()->Flush(fileHandle))
     {
@@ -1937,16 +1992,13 @@ size_t CCryPak::FSeek(AZ::IO::HandleType fileHandle, long seek, int mode)
 {
     SAutoCollectFileAcessTime accessTime(this);
 
+    CZipPseudoFile* pseudoFile = GetPseudoFile(fileHandle);
+    if (pseudoFile)
     {
-        AUTO_READLOCK(m_csOpenFiles);
-        INT_PTR nPseudoFile = ((INT_PTR)fileHandle) - g_nPseudoFileIdxOffset;
-        if ((UINT_PTR)nPseudoFile < m_arrOpenFiles.size())
-        {
-            return m_arrOpenFiles[nPseudoFile].FSeek(seek, mode);
-        }
+        return pseudoFile->FSeek(seek, mode);
     }
 
-    if (AZ::IO::FileIOBase::GetDirectInstance()->Seek(fileHandle, static_cast<uint64_t>(seek), AZ::IO::GetSeekTypeFromFSeekMode(mode)))
+    if (AZ::IO::FileIOBase::GetDirectInstance()->Seek(fileHandle, static_cast<AZ::s64>(seek), AZ::IO::GetSeekTypeFromFSeekMode(mode)))
     {
         return 0;
     }
@@ -1958,13 +2010,10 @@ size_t CCryPak::FWrite(const void* data, size_t length, size_t elems, AZ::IO::Ha
 {
     SAutoCollectFileAcessTime accessTime(this);
 
-    INT_PTR nPseudoFile = ((INT_PTR)fileHandle) - g_nPseudoFileIdxOffset;
+    CZipPseudoFile* pseudoFile = GetPseudoFile(fileHandle);
+    if (pseudoFile)
     {
-        AUTO_READLOCK(m_csOpenFiles);
-        if ((UINT_PTR)nPseudoFile < m_arrOpenFiles.size())
-        {
-            return 0;
-        }
+        return 0;
     }
 
     CRY_ASSERT(fileHandle);
@@ -1980,16 +2029,13 @@ size_t CCryPak::FWrite(const void* data, size_t length, size_t elems, AZ::IO::Ha
 size_t CCryPak::FReadRaw(void* pData, size_t nSize, size_t nCount, AZ::IO::HandleType fileHandle)
 {
     LOADING_TIME_PROFILE_SECTION;
-
+    AZ_PROFILE_SCOPE_DYNAMIC(AZ::Debug::ProfileCategory::Game, "Size: %d Pak: %p", nSize, this);
     SAutoCollectFileAcessTime accessTime(this);
 
+    CZipPseudoFile* pseudoFile = GetPseudoFile(fileHandle);
+    if (pseudoFile)
     {
-        AUTO_READLOCK(m_csOpenFiles);
-        INT_PTR nPseudoFile = ((INT_PTR)fileHandle) - g_nPseudoFileIdxOffset;
-        if ((UINT_PTR)nPseudoFile < m_arrOpenFiles.size())
-        {
-            return m_arrOpenFiles[nPseudoFile].FRead(pData, nSize, nCount, fileHandle);
-        }
+        return pseudoFile->FRead(pData, nSize, nCount, fileHandle);
     }
 
     AZ::u64 bytesRead = 0;
@@ -2003,13 +2049,10 @@ size_t CCryPak::FReadRawAll(void* pData, size_t nFileSize, AZ::IO::HandleType fi
     LOADING_TIME_PROFILE_SECTION;
 
     SAutoCollectFileAcessTime accessTime(this);
+    CZipPseudoFile* pseudoFile = GetPseudoFile(fileHandle);
+    if (pseudoFile)
     {
-        AUTO_READLOCK(m_csOpenFiles);
-        INT_PTR nPseudoFile = ((INT_PTR)fileHandle) - g_nPseudoFileIdxOffset;
-        if ((UINT_PTR)nPseudoFile < m_arrOpenFiles.size())
-        {
-            return m_arrOpenFiles[nPseudoFile].FReadAll(pData, nFileSize, fileHandle);
-        }
+        return pseudoFile->FReadAll(pData, nFileSize, fileHandle);
     }
 
     AZ::IO::FileIOBase::GetDirectInstance()->Seek(fileHandle, 0, AZ::IO::SeekType::SeekFromStart);
@@ -2024,13 +2067,10 @@ void* CCryPak::FGetCachedFileData(AZ::IO::HandleType fileHandle, size_t& nFileSi
     LOADING_TIME_PROFILE_SECTION;
 
     SAutoCollectFileAcessTime accessTime(this);
+    CZipPseudoFile* pseudoFile = GetPseudoFile(fileHandle);
+    if (pseudoFile)
     {
-        AUTO_READLOCK(m_csOpenFiles);
-        INT_PTR nPseudoFile = ((INT_PTR)fileHandle) - g_nPseudoFileIdxOffset;
-        if ((UINT_PTR)nPseudoFile < m_arrOpenFiles.size())
-        {
-            return m_arrOpenFiles[nPseudoFile].GetFileData(nFileSize, fileHandle);
-        }
+        return pseudoFile->GetFileData(nFileSize, fileHandle);
     }
 
     // Cached lookup
@@ -2097,7 +2137,7 @@ int CCryPak::FClose(AZ::IO::HandleType fileHandle)
     AUTO_MODIFYLOCK(m_csOpenFiles);
     if ((UINT_PTR)nPseudoFile < m_arrOpenFiles.size())
     {
-        m_arrOpenFiles[nPseudoFile].Destruct();
+        m_arrOpenFiles[nPseudoFile]->Destruct();
         return 0;
     }
     else
@@ -2112,21 +2152,16 @@ int CCryPak::FClose(AZ::IO::HandleType fileHandle)
 
 bool CCryPak::IsInPak(AZ::IO::HandleType fileHandle)
 {
-    AUTO_READLOCK(m_csOpenFiles);
-    INT_PTR nPseudoFile = ((INT_PTR)fileHandle) - g_nPseudoFileIdxOffset;
-    return (UINT_PTR)nPseudoFile < m_arrOpenFiles.size();
+    return GetPseudoFile(fileHandle) != nullptr;
 }
 
 int CCryPak::FEof(AZ::IO::HandleType fileHandle)
 {
     SAutoCollectFileAcessTime accessTime(this);
+    CZipPseudoFile* pseudoFile = GetPseudoFile(fileHandle);
+    if (pseudoFile)
     {
-        AUTO_READLOCK(m_csOpenFiles);
-        INT_PTR nPseudoFile = ((INT_PTR)fileHandle) - g_nPseudoFileIdxOffset;
-        if ((UINT_PTR)nPseudoFile < m_arrOpenFiles.size())
-        {
-            return m_arrOpenFiles[nPseudoFile].FEof();
-        }
+        return pseudoFile->FEof();
     }
 
     return AZ::IO::FileIOBase::GetDirectInstance()->Eof(fileHandle);
@@ -2136,15 +2171,11 @@ int CCryPak::FEof(AZ::IO::HandleType fileHandle)
 int CCryPak::FPrintf(AZ::IO::HandleType fileHandle, const char* szFormat, ...)
 {
     SAutoCollectFileAcessTime accessTime(this);
+    CZipPseudoFile* pseudoFile = GetPseudoFile(fileHandle);
+    if (pseudoFile)
     {
-        AUTO_READLOCK(m_csOpenFiles);
-        INT_PTR nPseudoFile = ((INT_PTR)fileHandle) - g_nPseudoFileIdxOffset;
-        if ((UINT_PTR)nPseudoFile < m_arrOpenFiles.size())
-        {
-            return 0; // we don't support it now
-        }
+        return 0; // we don't support it now
     }
-
 
     va_list arglist;
     int rv;
@@ -2157,13 +2188,10 @@ int CCryPak::FPrintf(AZ::IO::HandleType fileHandle, const char* szFormat, ...)
 char* CCryPak::FGets(char* str, int n, AZ::IO::HandleType fileHandle)
 {
     SAutoCollectFileAcessTime accessTime(this);
+    CZipPseudoFile* pseudoFile = GetPseudoFile(fileHandle);
+    if (pseudoFile)
     {
-        AUTO_READLOCK(m_csOpenFiles);
-        INT_PTR nPseudoFile = ((INT_PTR)fileHandle) - g_nPseudoFileIdxOffset;
-        if ((UINT_PTR)nPseudoFile < m_arrOpenFiles.size())
-        {
-            return m_arrOpenFiles[nPseudoFile].FGets(str, n);
-        }
+        return pseudoFile->FGets(str, n);
     }
 
     PROFILE_DISK_READ(n);
@@ -2174,13 +2202,10 @@ char* CCryPak::FGets(char* str, int n, AZ::IO::HandleType fileHandle)
 int CCryPak::Getc(AZ::IO::HandleType fileHandle)
 {
     SAutoCollectFileAcessTime accessTime(this);
+    CZipPseudoFile* pseudoFile = GetPseudoFile(fileHandle);
+    if (pseudoFile)
     {
-        AUTO_READLOCK(m_csOpenFiles);
-        INT_PTR nPseudoFile = ((INT_PTR)fileHandle) - g_nPseudoFileIdxOffset;
-        if ((UINT_PTR)nPseudoFile < m_arrOpenFiles.size())
-        {
-            return m_arrOpenFiles[nPseudoFile].Getc();
-        }
+        return pseudoFile->Getc();
     }
 
     PROFILE_DISK_READ(1);
@@ -2190,15 +2215,12 @@ int CCryPak::Getc(AZ::IO::HandleType fileHandle)
 int CCryPak::Ungetc(int c, AZ::IO::HandleType fileHandle)
 {
     SAutoCollectFileAcessTime accessTime(this);
+    CZipPseudoFile* pseudoFile = GetPseudoFile(fileHandle);
+    if (pseudoFile)
     {
-        AUTO_READLOCK(m_csOpenFiles);
-        INT_PTR nPseudoFile = ((INT_PTR)fileHandle) - g_nPseudoFileIdxOffset;
-        if ((UINT_PTR)nPseudoFile < m_arrOpenFiles.size())
-        {
-            return m_arrOpenFiles[nPseudoFile].Ungetc(c);
-        }
+        return pseudoFile->Ungetc(c);
     }
-
+    
     return AZ::IO::UnGetC(c, fileHandle);
 }
 
@@ -2347,7 +2369,13 @@ bool CCryPak::LoadPakToMemory(const char* pName, ICryPak::EInMemoryPakLocation n
     CryPathString pakFile = pName;
     pakFile.MakeLower();
 
-    pakFile = ConvertAbsolutePathToAliasedPath(pakFile.c_str());
+    AZ::Outcome<string, AZStd::string> conversionResult = CryPakInternal::ConvertAbsolutePathToAliasedPath(pakFile.c_str());
+    if (!conversionResult.IsSuccess())
+    {
+        AZ_Error("CryPak", false, conversionResult.GetError().c_str());
+        return false;
+    }
+    pakFile = conversionResult.GetValue();
     unsigned int index = 0;
     if (pakFile[index] != '@') // if unaliased, we need to alias it, since paks are using 'full paths' which are in fact aliased
     {
@@ -2475,7 +2503,14 @@ bool CCryPak::OpenPackCommon(const char* szBindRoot, const char* szFullPath, uns
     }
 
     // Note this will replace @devassets@ with @assets@ to provide a proper bind root for the paks
-    desc.strBindRoot = ConvertAbsolutePathToAliasedPath(desc.strBindRoot.c_str());
+    AZ::Outcome<string, AZStd::string> conversionResult = CryPakInternal::ConvertAbsolutePathToAliasedPath(desc.strBindRoot.c_str());
+    if (!conversionResult.IsSuccess())
+    {
+        AZ_Error("CryPak", false, conversionResult.GetError().c_str());
+        return false;
+    }
+
+    desc.strBindRoot = conversionResult.GetValue();
 
     // hold the lock from the point we query the zip array,
     // so we don't end up adding a given pak twice
@@ -2548,7 +2583,13 @@ bool CCryPak::OpenPackCommon(const char* szBindRoot, const char* szFullPath, uns
         m_pLog->LogWithType(IMiniLog::eComment, "Opening pak file %s to %s", szFullPath, szBindRoot ? szBindRoot : "<NIL>");
         desc.pZip = static_cast<CryArchive*>((ICryArchive*)desc.pArchive)->GetCache();
 
-        //Append the pak to the end but before any override paks
+        // Insert the pak lexically but before any override paks
+        // This allows us to order the paks allowing the later paks
+        // that have priority for same name files. This supports the
+        // patching of the base program underneath the mods/override paks
+        // All we have to do is name the pak appropriately to make
+        // sure later paks added to the current set of paks sort higher
+        // and therefore get used instead of lower sorted paks
         ZipArray::reverse_iterator revItZip = m_arrZips.rbegin();
         if ((nPakFlags& ICryArchive::FLAGS_OVERRIDE_PAK) == 0)
         {
@@ -2556,7 +2597,10 @@ bool CCryPak::OpenPackCommon(const char* szBindRoot, const char* szFullPath, uns
             {
                 if ((revItZip->pArchive->GetFlags() & ICryArchive::FLAGS_OVERRIDE_PAK) == 0)
                 {
-                    break;
+                    if (azstricmp(desc.GetFullPath(), revItZip->GetFullPath()) > 0)
+                    {
+                        break;
+                    }
                 }
             }
         }
@@ -2825,12 +2869,28 @@ bool CCryPak::InitPack(const char* szBasePath, unsigned nFlags)
 /////////////////////////////////////////////////////
 bool CCryPak::Init(const char* szBasePath)
 {
-    return InitPack(szBasePath);
+    bool result = InitPack(szBasePath);
+    BusConnect();
+    return result;
 }
 
 void CCryPak::Release()
 {
+    BusDisconnect();
 }
+
+//////////////////////////////////////////////////////////////////////////
+CZipPseudoFile* CCryPak::GetPseudoFile(AZ::IO::HandleType fileHandle) const
+{
+    AUTO_READLOCK(m_csOpenFiles);
+    INT_PTR nPseudoFile = ((INT_PTR)fileHandle) - g_nPseudoFileIdxOffset;
+    if ((UINT_PTR)nPseudoFile < m_arrOpenFiles.size())
+    {
+        return m_arrOpenFiles[nPseudoFile];
+    }
+    return nullptr;
+}
+
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
@@ -3311,18 +3371,21 @@ void CCryPakFindData::ScanFS(CCryPak* pPak, const char* szDirIn)
             {
                 fd.attrib |= _A_SUBDIR;
             }
-            if (AZ::IO::FileIOBase::GetDirectInstance()->IsReadOnly(filePath))
+            else
             {
-                fd.attrib |= _A_RDONLY;
-            }
-            AZ::u64 fileSize = 0;
-            AZ::IO::FileIOBase::GetDirectInstance()->Size(filePath, fileSize);
-            fd.size = fileSize;
-            fd.time_write = AZ::IO::FileIOBase::GetDirectInstance()->ModificationTime(filePath);
+                if (AZ::IO::FileIOBase::GetDirectInstance()->IsReadOnly(filePath))
+                {
+                    fd.attrib |= _A_RDONLY;
+                }
+                AZ::u64 fileSize = 0;
+                AZ::IO::FileIOBase::GetDirectInstance()->Size(filePath, fileSize);
+                fd.size = fileSize;
+                fd.time_write = AZ::IO::FileIOBase::GetDirectInstance()->ModificationTime(filePath);
 
-            // These times are not supported by our file interface
-            fd.time_access = fd.time_write;
-            fd.time_create = fd.time_write;
+                // These times are not supported by our file interface
+                fd.time_access = fd.time_write;
+                fd.time_create = fd.time_write;
+            }
             m_mapFiles.insert(FileMap::value_type(fd.name, FileDesc(&fd)));
 
             return true;
@@ -4510,6 +4573,56 @@ void CCryPak::OnSystemEvent(ESystemEvent event, UINT_PTR wparam, UINT_PTR lparam
 
     case ESYSTEM_EVENT_LEVEL_PRECACHE_END:
         break;
+    }
+}
+
+void CCryPak::FindCompressionInfo(bool& found, AZ::IO::CompressionInfo& info, const AZStd::string_view filename)
+{
+    if (!found)
+    {
+        char correctedFileBuff[g_nMaxPath];
+        const char* correctedFilename = AdjustFileName(filename.data(), correctedFileBuff, FOPEN_HINT_QUIET);
+        
+        unsigned int archiveFlags = 0;
+        ZipDir::CachePtr archive;
+        ZipDir::FileEntry* entry = FindPakFileEntry(correctedFilename, archiveFlags, &archive);
+        if (entry && entry->IsInitialized() && archive)
+        {
+            found = true;
+
+            info.m_archiveFilename.InitFromRelativePath(archive->GetFilePath());
+            info.m_compressionTag.m_code = s_compressionTag;
+            info.m_offset = archive->GetFileDataOffset(entry);
+            info.m_compressedSize = entry->desc.lSizeCompressed;
+            info.m_uncompressedSize = entry->desc.lSizeUncompressed;
+            info.m_isCompressed = entry->IsCompressed();
+
+            switch (m_pPakVars->nPriority)
+            {
+            case ePakPriorityFileFirst:
+                info.m_conflictResolution = AZ::IO::ConflictResolution::PreferFile;
+                break;
+            case ePakPriorityPakFirst:
+                info.m_conflictResolution = AZ::IO::ConflictResolution::PreferArchive;
+                break;
+            case ePakPriorityPakOnly:
+                info.m_conflictResolution = AZ::IO::ConflictResolution::UseArchiveOnly;
+                break;
+            case ePakPriorityFileFirstModsOnly:
+                info.m_conflictResolution = IsModPath(archive->GetFileEntryName(entry)) ?
+                    AZ::IO::ConflictResolution::PreferFile :
+                    AZ::IO::ConflictResolution::PreferArchive;
+                break;
+            }
+
+            info.m_decompressor = [](const AZ::IO::CompressionInfo& info, const void* compressed, size_t compressedSize, void* uncompressed, size_t uncompressedBufferSize)->bool
+            {
+                AZ_Assert(info.m_compressionTag.m_code == s_compressionTag, "Provided compression info isn't supported by this decompressor.");
+                CMTSafeHeap scratchHeap;
+                unsigned long nSizeUncompressed = uncompressedBufferSize;
+                return ZipDir::ZipRawUncompress(&scratchHeap, uncompressed, &nSizeUncompressed, compressed, compressedSize) == Z_OK;
+            };
+        }
     }
 }
 

@@ -17,13 +17,8 @@
 #include <ILevelSystem.h>
 
 #include "RemoteConsoleCore.h"
+#include <RemoteConsole_Traits_Platform.h>
 
-
-#if defined(AZ_RESTRICTED_PLATFORM)
-    #undef AZ_RESTRICTED_SECTION
-    #define REMOTECONSOLECORE_CPP_SECTION_1 1
-    #define REMOTECONSOLECORE_CPP_SECTION_2 2
-#endif
 
 
 const int defaultRemoteConsolePort = 4600; // externed in the header to expose publicly
@@ -156,10 +151,7 @@ void SRemoteServer::Terminate()
 void SRemoteServer::Run()
 {
     SetName(kServerThreadName);
-#if defined(AZ_RESTRICTED_PLATFORM)
-    #define AZ_RESTRICTED_SECTION REMOTECONSOLECORE_CPP_SECTION_1
-    #include AZ_RESTRICTED_FILE(RemoteConsoleCore_cpp, AZ_RESTRICTED_PLATFORM)
-#endif
+    AZ_TRAIT_REMOTECONSOLE_SET_THREAD_AFFINITY
 
     AZSOCKET sClient;
     AZ::AzSock::AzSocketAddress local;
@@ -350,10 +342,7 @@ void SRemoteClient::Terminate()
 void SRemoteClient::Run()
 {
     SetName(kClientThreadName);
-#if defined(AZ_RESTRICTED_PLATFORM)
-    #define AZ_RESTRICTED_SECTION REMOTECONSOLECORE_CPP_SECTION_2
-    #include AZ_RESTRICTED_FILE(RemoteConsoleCore_cpp, AZ_RESTRICTED_PLATFORM)
-#endif
+    AZ_TRAIT_REMOTECONSOLE_SET_THREAD_AFFINITY
 
     char szBuff[kDefaultBufferSize];
     int size;
